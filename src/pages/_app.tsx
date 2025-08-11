@@ -1,7 +1,8 @@
 import "@/styles/globals.css";
 import type { AppProps } from "next/app";
 import { useEffect, useState } from "react";
-
+import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 import { KanbanContextComponent } from "../context/KanbanContextComponent";
 import {
   Hydrate,
@@ -36,6 +37,7 @@ export default function App({ Component, pageProps }: AppProps) {
         <KanbanContextComponent>
           <Component {...pageProps} />
           <OnlineUsersButton />
+          <ToastContainer position="top-center" />
         </KanbanContextComponent>
       </Hydrate>
     </QueryClientProvider>
