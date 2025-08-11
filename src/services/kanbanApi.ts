@@ -95,3 +95,16 @@ export async function EditBoard(
 export async function fetchAllMembers(): Promise<Resp<any[]>> {
   return { status: 200, data: [{ user_id: 1, name: "AA" }] };
 }
+
+export async function DeleteBoard(boardid: number) {
+  const rows = load();
+  const next = rows.filter(r => r.boardid !== boardid);
+  save(next);
+  return { status: 200, data: { deleted: boardid } };
+}
+
+export async function fetchProjects() {
+  // derive "projects" from existing boards' titles for now (simple)
+  const titles = Array.from(new Set(load().map(r => r.title)));
+  return { status: 200, data: titles.map((t, i) => ({ id: i + 1, name: t })) };
+}
