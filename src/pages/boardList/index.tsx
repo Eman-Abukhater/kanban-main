@@ -4,14 +4,18 @@ import {
   AddBoard,
   DeleteBoard,
   EditBoard,
+  fetchAllMembers,
   fetchInitialBoards,
+  UpdateBoardFields,
 } from "@/services/kanbanApi";
 import CollapsedSidebar from "@/components/kanban/CollapsedSidebar";
 import AddBoardModal from "@/components/kanban/AddBoardModal";
 import { EyeIcon, TrashIcon } from "@heroicons/react/24/outline";
+import Select from "react-select";
 import { toast } from "react-toastify";
 
 type Role = "admin" | "employee";
+type Member = { id: number; name: string };
 
 export default function BoardList() {
   const router = useRouter();
@@ -23,6 +27,10 @@ export default function BoardList() {
   const [openAdd, setOpenAdd] = useState(false);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
 
+  // inline edit state: which row/field is being edited
+  const [editCell, setEditCell] = useState<{ id: number; field: "title" | "description" | "members" | "progress" } | null>(null);
+  const [membersOptions, setMembersOptions] = useState<Member[]>([]);
+
   const fkpoid = 1001; // fake project/org id
 
   async function load() {
@@ -30,7 +38,9 @@ export default function BoardList() {
       setLoading(true);
       const res = await fetchInitialBoards(fkpoid);
       setRows(res.data);
-    } catch (e) {
+      const m = await fetchAllMembers();
+      setMembersOptions(m.data);
+    } catch {
       toast.error("Failed to load boards");
     } finally {
       setLoading(false);
@@ -48,7 +58,6 @@ export default function BoardList() {
     return rows.filter((r) => r.title === projectFilter);
   }, [rows, projectFilter]);
 
-  // FIXED: match AddBoardModal's onSubmit shape
   async function createBoard({
     projectName,
     description,
@@ -70,7 +79,8 @@ export default function BoardList() {
     }
   }
 
-  async function renameBoard(row: any) {
+  async function renameBoardPrompt(row: any) {
+    // kept for fallback via prompt (not used in inline now)
     if (role !== "admin") return;
     const title = prompt("Rename project", row.title);
     if (!title) return;
@@ -98,6 +108,64 @@ export default function BoardList() {
     }
   }
 
+  // helpers for inline save
+  function updateRowLocal(boardid: number, patch: any) {
+    setRows((prev) => prev.map((r) => (r.boardid === boardid ? { ...r, ...patch } : r)));
+  }
+
+  async function saveTitle(boardid: number, value: string) {
+    try {
+      updateRowLocal(boardid, { title: value });
+      await UpdateBoardFields(boardid, { title: value });
+      toast.success("Project updated");
+    } catch {
+      toast.error("Update failed");
+    } finally {
+      setEditCell(null);
+    }
+  }
+
+  async function saveDescription(boardid: number, value: string) {
+    try {
+      updateRowLocal(boardid, { description: value });
+      await UpdateBoardFields(boardid, { description: value });
+      toast.success("Description updated");
+    } catch {
+      toast.error("Update failed");
+    } finally {
+      setEditCell(null);
+    }
+  }
+
+  async function saveMembers(boardid: number, memberIds: number[]) {
+    try {
+      const selected = memberIds
+        .map((id) => membersOptions.find((m) => m.id === id))
+        .filter(Boolean) as Member[];
+      updateRowLocal(boardid, { members: selected });
+      await UpdateBoardFields(boardid, { ...( { memberIds } as any) });
+      toast.success("Members updated");
+    } catch {
+      toast.error("Update failed");
+    } finally {
+      setEditCell(null);
+    }
+  }
+
+  async function saveProgress(boardid: number, progress: number) {
+    try {
+      updateRowLocal(boardid, { progress });
+      await UpdateBoardFields(boardid, { progress });
+      toast.success("Status updated");
+    } catch {
+      toast.error("Update failed");
+    } finally {
+      setEditCell(null);
+    }
+  }
+
+  const isAdmin = role === "admin";
+
   return (
     <div className="flex">
       {/* Sidebar (collapsed by default) */}
@@ -110,9 +178,9 @@ export default function BoardList() {
           <h1 className="text-2xl font-semibold">Admin Task Board</h1>
           <button
             onClick={() => setOpenAdd(true)}
-            disabled={role !== "admin"}
+            disabled={!isAdmin}
             className={`rounded-md border px-4 py-2 text-sm hover:bg-gray-50 ${
-              role !== "admin" ? "cursor-not-allowed opacity-50" : ""
+              !isAdmin ? "cursor-not-allowed opacity-50" : ""
             }`}
           >
             + Add Board
@@ -155,97 +223,178 @@ export default function BoardList() {
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((r) => (
-                  <tr key={r.fkboardid} className="border-t">
-                    <td className="px-3 py-2">{r.boardid}</td>
+                filteredRows.map((r) => {
+                  const editing = (field: typeof editCell extends null ? never : any) =>
+                    editCell && editCell.id === r.boardid && editCell.field === field;
 
-                    {/* title (click to rename if admin) */}
-                    <td className="px-3 py-2">
-                      <button
-                        onClick={() => renameBoard(r)}
-                        disabled={role !== "admin"}
-                        className={`underline-offset-2 hover:underline ${
-                          role !== "admin"
-                            ? "cursor-default hover:no-underline"
-                            : ""
-                        }`}
-                        title={role === "admin" ? "Rename" : ""}
+                  return (
+                    <tr key={r.fkboardid} className="border-t">
+                      <td className="px-3 py-2">{r.boardid}</td>
+
+                      {/* project / title */}
+                      <td
+                        className="px-3 py-2"
+                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "title" })}
                       >
-                        {r.title}
-                      </button>
-                    </td>
+                        {editing("title") ? (
+                          <input
+                            autoFocus
+                            defaultValue={r.title}
+                            className="w-full rounded border px-2 py-1 outline-none focus:ring"
+                            onBlur={(e) => saveTitle(r.boardid, e.target.value.trim() || r.title)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                              if (e.key === "Escape") setEditCell(null);
+                            }}
+                          />
+                        ) : (
+                          <span className={isAdmin ? "cursor-text" : ""} title={isAdmin ? "Double-click to edit" : ""}>
+                            {r.title}
+                          </span>
+                        )}
+                      </td>
 
-                    <td className="px-3 py-2">{r.description || "-"}</td>
+                      {/* description */}
+                      <td
+                        className="px-3 py-2"
+                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "description" })}
+                      >
+                        {editing("description") ? (
+                          <textarea
+                            autoFocus
+                            defaultValue={r.description || ""}
+                            className="w-full rounded border px-2 py-1 outline-none focus:ring"
+                            rows={2}
+                            onBlur={(e) => saveDescription(r.boardid, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                                (e.target as HTMLTextAreaElement).blur();
+                              }
+                              if (e.key === "Escape") setEditCell(null);
+                            }}
+                          />
+                        ) : (
+                          <span className={isAdmin ? "cursor-text" : ""} title={isAdmin ? "Double-click to edit" : ""}>
+                            {r.description || "-"}
+                          </span>
+                        )}
+                      </td>
 
-                    <td className="px-3 py-2">
-                      <div className="flex -space-x-2">
-                        {(r.members || [])
-                          .slice(0, 5)
-                          .map((m: any, i: number) => (
+                      {/* members */}
+                      <td
+                        className="px-3 py-2"
+                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "members" })}
+                      >
+                        {editing("members") ? (
+                          <Select
+                            autoFocus
+                            isMulti
+                            className="text-sm"
+                            options={membersOptions.map((m) => ({ value: m.id, label: m.name }))}
+                            defaultValue={(r.members || []).map((m: Member) => ({
+                              value: m.id,
+                              label: m.name,
+                            }))}
+                            onChange={(opts) =>
+                              saveMembers(
+                                r.boardid,
+                                (opts || []).map((o: any) => Number(o.value))
+                              )
+                            }
+                            onBlur={() => setEditCell(null)}
+                          />
+                        ) : (
+                          <div className="flex -space-x-2">
+                            {(r.members || [])
+                              .slice(0, 5)
+                              .map((m: Member, i: number) => (
+                                <div
+                                  key={i}
+                                  className="flex h-6 w-6 items-center justify-center rounded-full border bg-gray-100 text-[10px] font-medium"
+                                  title={m.name}
+                                >
+                                  {m.name?.slice(0, 2)}
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* status / progress */}
+                      <td
+                        className="px-3 py-2"
+                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "progress" })}
+                      >
+                        {editing("progress") ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="range"
+                              min={0}
+                              max={100}
+                              defaultValue={r.progress ?? 0}
+                              onChange={(e) => updateRowLocal(r.boardid, { progress: Number(e.target.value) })}
+                              onMouseUp={(e) => saveProgress(r.boardid, Number((e.target as HTMLInputElement).value))}
+                              className="w-32"
+                            />
+                            <span className="w-10 text-xs text-gray-600">{r.progress ?? 0}%</span>
+                          </div>
+                        ) : (
+                          <div className="h-3 w-28 rounded bg-gray-200" title={isAdmin ? "Double-click to edit" : ""}>
                             <div
-                              key={i}
-                              className="flex h-6 w-6 items-center justify-center rounded-full border bg-gray-100 text-[10px] font-medium"
-                              title={m.name}
-                            >
-                              {m.name?.slice(0, 2)}
-                            </div>
-                          ))}
-                      </div>
-                    </td>
+                              className={`h-3 rounded ${
+                                (r.progress ?? 0) < 30
+                                  ? "bg-red-500"
+                                  : (r.progress ?? 0) < 70
+                                  ? "bg-yellow-500"
+                                  : "bg-green-500"
+                              }`}
+                              style={{ width: `${r.progress ?? 0}%` }}
+                            />
+                          </div>
+                        )}
+                      </td>
 
-                    <td className="px-3 py-2">
-                      <div className="h-3 w-28 rounded bg-gray-200">
-                        <div
-                          className="h-3 rounded bg-green-500"
-                          style={{ width: `${r.progress ?? 0}%` }}
-                          title={`${r.progress ?? 0}%`}
-                        />
-                      </div>
-                    </td>
+                      <td className="px-3 py-2">
+                        {new Date(r.createdAt).toLocaleDateString()}
+                      </td>
+                      <td className="px-3 py-2">{r.addedby}</td>
 
-                    <td className="px-3 py-2">
-                      {new Date(r.createdAt).toLocaleDateString()}
-                    </td>
-                    <td className="px-3 py-2">{r.addedby}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded border px-2 py-1 text-xs"
+                            onClick={() =>
+                              router.push(
+                                `/kanbanList/${r.fkboardid}?userGuid=${userGuid || "ADMIN-GUID"}`
+                              )
+                            }
+                            title="view"
+                          >
+                            <EyeIcon className="h-4 w-4" />
+                          </button>
 
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="rounded border px-2 py-1 text-xs"
-                          onClick={() =>
-                            router.push(
-                              `/kanbanList/${r.fkboardid}?userGuid=${
-                                userGuid || "ADMIN-GUID"
-                              }`
-                            )
-                          }
-                          title="view"
-                        >
-                          <EyeIcon className="h-4 w-4" />
-                        </button>
-
-                        <button
-                          onClick={() => removeBoard(r)}
-                          disabled={role !== "admin"}
-                          className={`rounded border px-2 py-1 text-xs ${
-                            role !== "admin"
-                              ? "cursor-not-allowed opacity-50"
-                              : ""
-                          }`}
-                          title="delete"
-                        >
-                          <TrashIcon className="h-4 w-4 text-red-500" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          <button
+                            onClick={() => removeBoard(r)}
+                            disabled={!isAdmin}
+                            className={`rounded border px-2 py-1 text-xs ${
+                              !isAdmin ? "cursor-not-allowed opacity-50" : ""
+                            }`}
+                            title="delete"
+                          >
+                            <TrashIcon className="h-4 w-4 text-red-500" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
 
         <div className="mt-3 text-center text-xs text-gray-500">
+          {/* Placeholder note, matches Excalidraw */}
           sum calculations of the tasks of all the lists in single board
         </div>
       </div>
