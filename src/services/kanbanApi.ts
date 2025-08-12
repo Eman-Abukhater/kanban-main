@@ -132,3 +132,26 @@ export async function fetchProjects() {
 export async function fetchAllMembers(): Promise<Resp<{ id: number; name: string }[]>> {
   return { status: 200, data: FAKE_MEMBERS };
 }
+
+// Update any fields on a board (title, description, members, progress, etc.)
+export async function UpdateBoardFields(
+  boardid: number,
+  patch: Partial<Pick<BoardRow, "title" | "description" | "members" | "progress">>
+) {
+  const rows = load();
+  const idx = rows.findIndex(r => r.boardid === boardid);
+  if (idx === -1) return { status: 404, data: null as any };
+
+  // If members came in as ids, map them to objects
+  if ((patch as any).memberIds) {
+    const ids = (patch as any).memberIds as number[];
+    patch.members = ids
+      .map(id => (FAKE_MEMBERS as any).find((m: any) => m.id === id))
+      .filter(Boolean) as any;
+    delete (patch as any).memberIds;
+  }
+
+  rows[idx] = { ...rows[idx], ...patch };
+  save(rows);
+  return { status: 200, data: rows[idx] };
+}
