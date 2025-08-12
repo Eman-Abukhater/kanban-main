@@ -97,15 +97,15 @@ export default function BoardList() {
 
   async function removeBoard(row: any) {
     if (role !== "admin") return;
-    const ok = confirm(`Delete board "${row.title}"?`);
-    if (!ok) return;
     try {
       await DeleteBoard(row.boardid);
-      setRows((prev) => prev.filter((r) => r.boardid !== row.boardid));
-      toast.success("Board deleted");
+      setRows(prev => prev.filter(r => r.boardid !== row.boardid));
+      toast.success(`Board "${row.title}" deleted`);
     } catch {
-      toast.error("Delete failed");
+      toast.error("Failed to delete board");
     }
+    
+   
   }
 
   // helpers for inline save
