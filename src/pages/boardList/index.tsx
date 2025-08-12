@@ -187,12 +187,6 @@ export default function BoardList() {
           </button>
         </div>
 
-        {/* Filters stub (left icons) */}
-        <div className="mb-3 flex items-center gap-3">
-          <div className="h-6 w-6 rounded-full border" title="Search" />
-          <div className="h-6 w-8 rounded border" title="Filters" />
-          <div className="h-6 w-8 rounded border" title="Filters" />
-        </div>
 
         {/* Table */}
         <div className="overflow-x-auto rounded-lg border">
