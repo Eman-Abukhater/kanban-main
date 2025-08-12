@@ -9,6 +9,7 @@ import {
 import CollapsedSidebar from "@/components/kanban/CollapsedSidebar";
 import AddBoardModal from "@/components/kanban/AddBoardModal";
 import { EyeIcon, TrashIcon } from "@heroicons/react/24/outline";
+import { toast } from "react-toastify";
 
 type Role = "admin" | "employee";
 
@@ -25,43 +26,76 @@ export default function BoardList() {
   const fkpoid = 1001; // fake project/org id
 
   async function load() {
-    setLoading(true);
-    const res = await fetchInitialBoards(fkpoid);
-    setRows(res.data);
-    setLoading(false);
+    try {
+      setLoading(true);
+      const res = await fetchInitialBoards(fkpoid);
+      setRows(res.data);
+    } catch (e) {
+      toast.error("Failed to load boards");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Optional: filter by project when the user clicks in the sidebar
   const filteredRows = useMemo(() => {
     if (!projectFilter) return rows;
-    return rows.filter(r => r.title === projectFilter);
+    return rows.filter((r) => r.title === projectFilter);
   }, [rows, projectFilter]);
 
-  async function createBoard({ title }: { title: string }) {
-    const res = await AddBoard(title, fkpoid, 205, "205-Osama Ahmed");
-    setRows((prev) => [res.data, ...prev]);
+  // FIXED: match AddBoardModal's onSubmit shape
+  async function createBoard({
+    projectName,
+    description,
+    memberIds,
+  }: {
+    projectName: string;
+    description?: string;
+    memberIds: number[];
+  }) {
+    try {
+      const res = await AddBoard(projectName, fkpoid, 205, "205-Osama Ahmed", {
+        description,
+        memberIds,
+      });
+      setRows((prev) => [res.data, ...prev]);
+      toast.success("Board created");
+    } catch {
+      toast.error("Failed to create board");
+    }
   }
 
   async function renameBoard(row: any) {
     if (role !== "admin") return;
     const title = prompt("Rename project", row.title);
     if (!title) return;
-    await EditBoard(title, row.boardid ?? null, "Admin");
-    setRows((prev) =>
-      prev.map((r) => (r.boardid === row.boardid ? { ...r, title } : r))
-    );
+    try {
+      await EditBoard(title, row.boardid ?? null, "Admin");
+      setRows((prev) =>
+        prev.map((r) => (r.boardid === row.boardid ? { ...r, title } : r))
+      );
+      toast.success("Board renamed");
+    } catch {
+      toast.error("Rename failed");
+    }
   }
 
   async function removeBoard(row: any) {
     if (role !== "admin") return;
     const ok = confirm(`Delete board "${row.title}"?`);
     if (!ok) return;
-    await DeleteBoard(row.boardid);
-    setRows(prev => prev.filter(r => r.boardid !== row.boardid));
+    try {
+      await DeleteBoard(row.boardid);
+      setRows((prev) => prev.filter((r) => r.boardid !== row.boardid));
+      toast.success("Board deleted");
+    } catch {
+      toast.error("Delete failed");
+    }
   }
 
   return (
@@ -131,7 +165,9 @@ export default function BoardList() {
                         onClick={() => renameBoard(r)}
                         disabled={role !== "admin"}
                         className={`underline-offset-2 hover:underline ${
-                          role !== "admin" ? "cursor-default hover:no-underline" : ""
+                          role !== "admin"
+                            ? "cursor-default hover:no-underline"
+                            : ""
                         }`}
                         title={role === "admin" ? "Rename" : ""}
                       >
@@ -143,15 +179,17 @@ export default function BoardList() {
 
                     <td className="px-3 py-2">
                       <div className="flex -space-x-2">
-                        {(r.members || []).slice(0, 5).map((m: any, i: number) => (
-                          <div
-                            key={i}
-                            className="flex h-6 w-6 items-center justify-center rounded-full border bg-gray-100 text-[10px] font-medium"
-                            title={m.name}
-                          >
-                            {m.name?.slice(0, 2)}
-                          </div>
-                        ))}
+                        {(r.members || [])
+                          .slice(0, 5)
+                          .map((m: any, i: number) => (
+                            <div
+                              key={i}
+                              className="flex h-6 w-6 items-center justify-center rounded-full border bg-gray-100 text-[10px] font-medium"
+                              title={m.name}
+                            >
+                              {m.name?.slice(0, 2)}
+                            </div>
+                          ))}
                       </div>
                     </td>
 
@@ -176,7 +214,9 @@ export default function BoardList() {
                           className="rounded border px-2 py-1 text-xs"
                           onClick={() =>
                             router.push(
-                              `/kanbanList/${r.fkboardid}?userGuid=${userGuid || "ADMIN-GUID"}`
+                              `/kanbanList/${r.fkboardid}?userGuid=${
+                                userGuid || "ADMIN-GUID"
+                              }`
                             )
                           }
                           title="view"
@@ -188,7 +228,9 @@ export default function BoardList() {
                           onClick={() => removeBoard(r)}
                           disabled={role !== "admin"}
                           className={`rounded border px-2 py-1 text-xs ${
-                            role !== "admin" ? "cursor-not-allowed opacity-50" : ""
+                            role !== "admin"
+                              ? "cursor-not-allowed opacity-50"
+                              : ""
                           }`}
                           title="delete"
                         >
