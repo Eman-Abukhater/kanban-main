@@ -29,37 +29,25 @@ export default function FilterToolbar({ open, onClose, onApply, initial = [] }: 
   const [filters, setFilters] = useState<Filter[]>(initial);
   useEffect(() => setFilters(initial), [initial]);
 
-  const addRow = () => {
-    setFilters((prev) => [...prev, { column: "title", op: "contains", value: "" }]);
-  };
-
-  const removeRow = (idx: number) => {
-    setFilters((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  const setRow = (idx: number, patch: Partial<Filter>) => {
+  const addRow = () => setFilters((prev) => [...prev, { column: "title", op: "contains", value: "" }]);
+  const removeRow = (idx: number) => setFilters((prev) => prev.filter((_, i) => i !== idx));
+  const setRow = (idx: number, patch: Partial<Filter>) =>
     setFilters((prev) => prev.map((f, i) => (i === idx ? { ...f, ...patch } : f)));
-  };
 
   const rows = useMemo(() => filters, [filters]);
-
   if (!open) return null;
 
   return (
-    <div className="sticky top-0 z-20 mb-3 rounded-lg border bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <div className="text-xs font-semibold uppercase text-purple-600 tracking-wide flex items-center gap-4">
-          <span>Columns</span>
-          <span>Filters</span>
-          <span>Density</span>
-          <span>Export</span>
-        </div>
-        <button onClick={onClose} className="rounded px-2 py-1 text-xs hover:bg-gray-50">
+    <div className="sticky top-0 z-20 mb-3 rounded-lg border border-gray-200 bg-white shadow-sm">
+      {/* Minimal header: title + close */}
+      <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
+        <div className="text-sm font-semibold text-gray-800">Filters</div>
+        <button onClick={onClose} className="rounded px-2 py-1 text-sm text-gray-600 hover:bg-gray-50">
           ✕
         </button>
       </div>
 
-      <div className="p-3 space-y-2">
+      <div className="space-y-2 p-3">
         {rows.length === 0 && (
           <div className="text-xs text-gray-500">No filters. Click “Add filter”.</div>
         )}
@@ -78,7 +66,7 @@ export default function FilterToolbar({ open, onClose, onApply, initial = [] }: 
                   const meta = COLS.find((c) => c.key === nextCol)!;
                   setRow(idx, { column: nextCol, op: OPS[meta.type][0], value: "" });
                 }}
-                className="w-44 rounded border px-2 py-1 text-sm"
+                className="w-44 rounded border border-gray-300 px-2 py-1 text-sm text-gray-800"
               >
                 {COLS.map((c) => (
                   <option key={c.key} value={c.key}>
@@ -91,7 +79,7 @@ export default function FilterToolbar({ open, onClose, onApply, initial = [] }: 
               <select
                 value={row.op}
                 onChange={(e) => setRow(idx, { op: e.target.value })}
-                className="w-32 rounded border px-2 py-1 text-sm"
+                className="w-36 rounded border border-gray-300 px-2 py-1 text-sm text-gray-800"
               >
                 {ops.map((o) => (
                   <option key={o} value={o}>
@@ -106,14 +94,14 @@ export default function FilterToolbar({ open, onClose, onApply, initial = [] }: 
                   type="date"
                   value={row.value}
                   onChange={(e) => setRow(idx, { value: e.target.value })}
-                  className="w-56 rounded border px-2 py-1 text-sm"
+                  className="w-56 rounded border border-gray-300 px-2 py-1 text-sm text-gray-800"
                 />
               ) : (
                 <input
                   value={row.value}
                   onChange={(e) => setRow(idx, { value: e.target.value })}
                   placeholder="Filter value"
-                  className="w-56 rounded border px-2 py-1 text-sm"
+                  className="w-56 rounded border border-gray-300 px-2 py-1 text-sm text-gray-800"
                 />
               )}
 
@@ -129,19 +117,22 @@ export default function FilterToolbar({ open, onClose, onApply, initial = [] }: 
         })}
 
         <div className="flex items-center justify-between pt-2">
-          <button onClick={addRow} className="rounded border px-2 py-1 text-xs hover:bg-gray-50">
+          <button
+            onClick={addRow}
+            className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-800 hover:bg-gray-50"
+          >
             + Add filter
           </button>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setFilters([])}
-              className="rounded px-2 py-1 text-xs hover:bg-gray-50"
+              className="rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
             >
               Clear
             </button>
             <button
               onClick={() => onApply(filters)}
-              className="rounded bg-purple-600 px-3 py-1 text-xs font-medium text-white hover:opacity-90"
+              className="rounded bg-black px-3 py-1 text-xs font-medium text-white hover:opacity-90"
             >
               Apply
             </button>

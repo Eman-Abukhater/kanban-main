@@ -280,10 +280,18 @@ export default function BoardList() {
         <div className="mb-3">
           <button
             onClick={() => setFiltersOpen((v) => !v)}
-            className="rounded border border-purple-300 px-3 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50"
+            className="rounded border border-gray-300 px-3 py-1 text-xs font-medium text-gray-900 hover:bg-gray-50"
           >
-            ▤ Filters
+            ▤ Filters{filters.length ? ` (${filters.length})` : ""}
           </button>
+          {filters.length > 0 && (
+            <button
+              onClick={() => setFilters([])}
+              className="ml-2 rounded px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         <FilterToolbar
