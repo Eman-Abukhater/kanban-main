@@ -30,7 +30,10 @@ export default function BoardList() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<any[]>([]);
   // inline edit state: which row/field is being edited
-  const [editCell, setEditCell] = useState<{ id: number; field: "title" | "description" | "members" | "progress" } | null>(null);
+  const [editCell, setEditCell] = useState<{
+    id: number;
+    field: "title" | "description" | "members" | "progress";
+  } | null>(null);
   const [membersOptions, setMembersOptions] = useState<Member[]>([]);
 
   const fkpoid = 1001; // fake project/org id
@@ -56,9 +59,11 @@ export default function BoardList() {
 
   // Optional: filter by project when the user clicks in the sidebar
   const filteredRows = useMemo(() => {
-    if (!projectFilter) return rows;
-    return rows.filter((r) => r.title === projectFilter);
-  }, [rows, projectFilter]);
+    const byProject = projectFilter
+      ? rows.filter((r) => r.title === projectFilter)
+      : rows;
+    return applyFilters(byProject, filters);
+  }, [rows, projectFilter, filters]);
 
   async function createBoard({
     projectName,
@@ -101,18 +106,18 @@ export default function BoardList() {
     if (role !== "admin") return;
     try {
       await DeleteBoard(row.boardid);
-      setRows(prev => prev.filter(r => r.boardid !== row.boardid));
+      setRows((prev) => prev.filter((r) => r.boardid !== row.boardid));
       toast.success(`Board "${row.title}" deleted`);
     } catch {
       toast.error("Failed to delete board");
     }
-    
-   
   }
 
   // helpers for inline save
   function updateRowLocal(boardid: number, patch: any) {
-    setRows((prev) => prev.map((r) => (r.boardid === boardid ? { ...r, ...patch } : r)));
+    setRows((prev) =>
+      prev.map((r) => (r.boardid === boardid ? { ...r, ...patch } : r))
+    );
   }
 
   async function saveTitle(boardid: number, value: string) {
@@ -145,7 +150,7 @@ export default function BoardList() {
         .map((id) => membersOptions.find((m) => m.id === id))
         .filter(Boolean) as Member[];
       updateRowLocal(boardid, { members: selected });
-      await UpdateBoardFields(boardid, { ...( { memberIds } as any) });
+      await UpdateBoardFields(boardid, { ...({ memberIds } as any) });
       toast.success("Members updated");
     } catch {
       toast.error("Update failed");
@@ -167,6 +172,88 @@ export default function BoardList() {
   }
 
   const isAdmin = role === "admin";
+  function applyFilters(inputRows: any[], fs: any[]) {
+    if (!fs || fs.length === 0) return inputRows;
+
+    const cmp = (
+      val: any,
+      op: string,
+      needle: string,
+      type: "number" | "string" | "date"
+    ) => {
+      if (val === undefined || val === null) return false;
+      const n = needle ?? "";
+      if (type === "number") {
+        const a = Number(val);
+        const b = Number(n);
+        switch (op) {
+          case "=":
+            return a === b;
+          case "!=":
+            return a !== b;
+          case ">":
+            return a > b;
+          case ">=":
+            return a >= b;
+          case "<":
+            return a < b;
+          case "<=":
+            return a <= b;
+          default:
+            return false;
+        }
+      } else if (type === "date") {
+        const a = new Date(val).setHours(0, 0, 0, 0);
+        const b = new Date(n).setHours(0, 0, 0, 0);
+        switch (op) {
+          case "is":
+            return a === b;
+          case "before":
+            return a < b;
+          case "after":
+            return a > b;
+          case "onOrBefore":
+            return a <= b;
+          case "onOrAfter":
+            return a >= b;
+          case "!=":
+            return a !== b;
+          default:
+            return false;
+        }
+      } else {
+        const s = String(val).toLowerCase();
+        const q = String(n).toLowerCase();
+        switch (op) {
+          case "contains":
+            return s.includes(q);
+          case "equals":
+            return s === q;
+          case "startsWith":
+            return s.startsWith(q);
+          case "endsWith":
+            return s.endsWith(q);
+          case "!=":
+            return s !== q;
+          default:
+            return false;
+        }
+      }
+    };
+
+    const META: any = {
+      boardid: "number",
+      progress: "number",
+      title: "string",
+      description: "string",
+      createdAt: "date",
+      addedby: "string",
+    };
+
+    return inputRows.filter((row) =>
+      fs.every((f: any) => cmp(row[f.column], f.op, f.value, META[f.column]))
+    );
+  }
 
   return (
     <div className="flex">
@@ -189,6 +276,25 @@ export default function BoardList() {
           </button>
         </div>
 
+        {/* Filters / toolbar */}
+        <div className="mb-3">
+          <button
+            onClick={() => setFiltersOpen((v) => !v)}
+            className="rounded border border-purple-300 px-3 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50"
+          >
+            ▤ Filters
+          </button>
+        </div>
+
+        <FilterToolbar
+          open={filtersOpen}
+          onClose={() => setFiltersOpen(false)}
+          onApply={(fs) => {
+            setFilters(fs);
+            setFiltersOpen(false);
+          }}
+          initial={filters}
+        />
 
         {/* Table */}
         <div className="overflow-x-auto rounded-lg border">
@@ -220,8 +326,12 @@ export default function BoardList() {
                 </tr>
               ) : (
                 filteredRows.map((r) => {
-                  const editing = (field: typeof editCell extends null ? never : any) =>
-                    editCell && editCell.id === r.boardid && editCell.field === field;
+                  const editing = (
+                    field: typeof editCell extends null ? never : any
+                  ) =>
+                    editCell &&
+                    editCell.id === r.boardid &&
+                    editCell.field === field;
 
                   return (
                     <tr key={r.fkboardid} className="border-t">
@@ -230,21 +340,33 @@ export default function BoardList() {
                       {/* project / title */}
                       <td
                         className="px-3 py-2"
-                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "title" })}
+                        onDoubleClick={() =>
+                          isAdmin &&
+                          setEditCell({ id: r.boardid, field: "title" })
+                        }
                       >
                         {editing("title") ? (
                           <input
                             autoFocus
                             defaultValue={r.title}
                             className="w-full rounded border px-2 py-1 outline-none focus:ring"
-                            onBlur={(e) => saveTitle(r.boardid, e.target.value.trim() || r.title)}
+                            onBlur={(e) =>
+                              saveTitle(
+                                r.boardid,
+                                e.target.value.trim() || r.title
+                              )
+                            }
                             onKeyDown={(e) => {
-                              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                              if (e.key === "Enter")
+                                (e.target as HTMLInputElement).blur();
                               if (e.key === "Escape") setEditCell(null);
                             }}
                           />
                         ) : (
-                          <span className={isAdmin ? "cursor-text" : ""} title={isAdmin ? "Double-click to edit" : ""}>
+                          <span
+                            className={isAdmin ? "cursor-text" : ""}
+                            title={isAdmin ? "Double-click to edit" : ""}
+                          >
                             {r.title}
                           </span>
                         )}
@@ -253,7 +375,10 @@ export default function BoardList() {
                       {/* description */}
                       <td
                         className="px-3 py-2"
-                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "description" })}
+                        onDoubleClick={() =>
+                          isAdmin &&
+                          setEditCell({ id: r.boardid, field: "description" })
+                        }
                       >
                         {editing("description") ? (
                           <textarea
@@ -261,16 +386,24 @@ export default function BoardList() {
                             defaultValue={r.description || ""}
                             className="w-full rounded border px-2 py-1 outline-none focus:ring"
                             rows={2}
-                            onBlur={(e) => saveDescription(r.boardid, e.target.value)}
+                            onBlur={(e) =>
+                              saveDescription(r.boardid, e.target.value)
+                            }
                             onKeyDown={(e) => {
-                              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                              if (
+                                e.key === "Enter" &&
+                                (e.ctrlKey || e.metaKey)
+                              ) {
                                 (e.target as HTMLTextAreaElement).blur();
                               }
                               if (e.key === "Escape") setEditCell(null);
                             }}
                           />
                         ) : (
-                          <span className={isAdmin ? "cursor-text" : ""} title={isAdmin ? "Double-click to edit" : ""}>
+                          <span
+                            className={isAdmin ? "cursor-text" : ""}
+                            title={isAdmin ? "Double-click to edit" : ""}
+                          >
                             {r.description || "-"}
                           </span>
                         )}
@@ -279,18 +412,26 @@ export default function BoardList() {
                       {/* members */}
                       <td
                         className="px-3 py-2"
-                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "members" })}
+                        onDoubleClick={() =>
+                          isAdmin &&
+                          setEditCell({ id: r.boardid, field: "members" })
+                        }
                       >
                         {editing("members") ? (
                           <Select
                             autoFocus
                             isMulti
                             className="text-sm"
-                            options={membersOptions.map((m) => ({ value: m.id, label: m.name }))}
-                            defaultValue={(r.members || []).map((m: Member) => ({
+                            options={membersOptions.map((m) => ({
                               value: m.id,
                               label: m.name,
                             }))}
+                            defaultValue={(r.members || []).map(
+                              (m: Member) => ({
+                                value: m.id,
+                                label: m.name,
+                              })
+                            )}
                             onChange={(opts) =>
                               saveMembers(
                                 r.boardid,
@@ -319,7 +460,10 @@ export default function BoardList() {
                       {/* status / progress */}
                       <td
                         className="px-3 py-2"
-                        onDoubleClick={() => isAdmin && setEditCell({ id: r.boardid, field: "progress" })}
+                        onDoubleClick={() =>
+                          isAdmin &&
+                          setEditCell({ id: r.boardid, field: "progress" })
+                        }
                       >
                         {editing("progress") ? (
                           <div className="flex items-center gap-2">
@@ -328,14 +472,28 @@ export default function BoardList() {
                               min={0}
                               max={100}
                               defaultValue={r.progress ?? 0}
-                              onChange={(e) => updateRowLocal(r.boardid, { progress: Number(e.target.value) })}
-                              onMouseUp={(e) => saveProgress(r.boardid, Number((e.target as HTMLInputElement).value))}
+                              onChange={(e) =>
+                                updateRowLocal(r.boardid, {
+                                  progress: Number(e.target.value),
+                                })
+                              }
+                              onMouseUp={(e) =>
+                                saveProgress(
+                                  r.boardid,
+                                  Number((e.target as HTMLInputElement).value)
+                                )
+                              }
                               className="w-32"
                             />
-                            <span className="w-10 text-xs text-gray-600">{r.progress ?? 0}%</span>
+                            <span className="w-10 text-xs text-gray-600">
+                              {r.progress ?? 0}%
+                            </span>
                           </div>
                         ) : (
-                          <div className="h-3 w-28 rounded bg-gray-200" title={isAdmin ? "Double-click to edit" : ""}>
+                          <div
+                            className="h-3 w-28 rounded bg-gray-200"
+                            title={isAdmin ? "Double-click to edit" : ""}
+                          >
                             <div
                               className={`h-3 rounded ${
                                 (r.progress ?? 0) < 30
@@ -361,7 +519,9 @@ export default function BoardList() {
                             className="rounded border px-2 py-1 text-xs"
                             onClick={() =>
                               router.push(
-                                `/kanbanList/${r.fkboardid}?userGuid=${userGuid || "ADMIN-GUID"}`
+                                `/kanbanList/${r.fkboardid}?userGuid=${
+                                  userGuid || "ADMIN-GUID"
+                                }`
                               )
                             }
                             title="view"
