@@ -13,6 +13,7 @@ import AddBoardModal from "@/components/kanban/AddBoardModal";
 import { EyeIcon, TrashIcon } from "@heroicons/react/24/outline";
 import Select from "react-select";
 import { toast } from "react-toastify";
+import FilterToolbar from "@/components/kanban/FilterToolbar";
 
 type Role = "admin" | "employee";
 type Member = { id: number; name: string };
@@ -26,7 +27,8 @@ export default function BoardList() {
   const [rows, setRows] = useState<any[]>([]);
   const [openAdd, setOpenAdd] = useState(false);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
-
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState<any[]>([]);
   // inline edit state: which row/field is being edited
   const [editCell, setEditCell] = useState<{ id: number; field: "title" | "description" | "members" | "progress" } | null>(null);
   const [membersOptions, setMembersOptions] = useState<Member[]>([]);
