@@ -557,10 +557,7 @@ export default function BoardList() {
           </table>
         </div>
 
-        <div className="mt-3 text-center text-xs text-gray-500">
-          {/* Placeholder note, matches Excalidraw */}
-          sum calculations of the tasks of all the lists in single board
-        </div>
+       
       </div>
 
       {/* Add Board Modal */}
