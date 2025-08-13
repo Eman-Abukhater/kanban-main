@@ -15,7 +15,6 @@ export type DrawerCard = {
   description?: string;
   imageUrl?: string | null;
   tasks?: Task[];
-  // optional date range if your real API supports
   startDate?: string | null;
   endDate?: string | null;
 };
