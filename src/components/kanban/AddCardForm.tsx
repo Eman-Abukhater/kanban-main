@@ -42,11 +42,10 @@ export function AddCardForm(props: IAddFormProps) {
       //add new list in db
       const customResponse = await AddCard(
         name,
-        props.fkKanbanListId,
+        props.fkKanbanListId.toString(),
         props.userInfo.username,
         props.userInfo.userid,
         props.userInfo.fkboardid,
-        props.userInfo.fkpoid,
       );
 
       if (customResponse?.status === 200) {
