@@ -1,20 +1,7 @@
 // src/pages/kanbanList/[id].tsx
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
-import {
-  fetchKanbanList,
-  AddKanbanList,
-  AddCard,
-  useOnDragEndCard,
-  useOnDragEndList,
-  EditCard,
-  AddTask,
-  SubmitTask,
-  DeleteTask,
-  fetchAllMembers,
-  getShareLink as getShareLinkApi,
-  closeBoard as closeBoardApi,
-} from "@/services/kanbanApi";
+import * as kanbanApi from "@/services/kanbanApi";
 import {
   DragDropContext,
   Droppable,
@@ -22,8 +9,9 @@ import {
   DropResult,
 } from "react-beautiful-dnd";
 import { toast } from "react-toastify";
+import CardDrawer from "@/components/kanban/CardDrawer";
 
-// ==== Types ====
+// ==== Types (page-local, normalized) ====
 type Role = "admin" | "employee";
 
 type Task = {
@@ -41,6 +29,9 @@ type Card = {
   position: number;
   imageUrl?: string | null;
   tasks?: Task[];
+  startDate?: string | null;
+  endDate?: string | null;
+  tags?: { id: string | number; title: string; color?: string }[];
 };
 
 type List = {
@@ -58,12 +49,12 @@ export default function KanbanPage() {
     view?: string;
   };
 
-  const fkboardid = id; // GUID from BoardList "View" button
+  const fkboardid = id; // GUID in URL
   const role: Role = userGuid === "ADMIN-GUID" ? "admin" : "employee";
   const readOnly = view === "public";
   const isAdmin = role === "admin" && !readOnly;
 
-  // Demo current user id (replace with real auth when ready)
+  // Replace this with your real auth later
   const currentUserId = isAdmin ? 205 : 301;
 
   const [loading, setLoading] = useState(true);
@@ -72,18 +63,24 @@ export default function KanbanPage() {
   const [progress, setProgress] = useState<number>(0);
   const [members, setMembers] = useState<{ id: number; name: string }[]>([]);
 
-  // per-list infinite scroll: list_id -> visible count
+  // drawer state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<"create" | "edit">("edit");
+  const [activeCard, setActiveCard] = useState<Card | null>(null);
+  const [createTargetListId, setCreateTargetListId] = useState<string | null>(
+    null
+  );
+
+  // per-list infinite scroll
   const [visibleMap, setVisibleMap] = useState<Record<string, number>>({});
 
-  // permissions
-  const canEditCard = (c: Card) =>
-    isAdmin ||
-    (c.tasks && c.tasks.some((t) => t.assigneeId === currentUserId));
-  const canWrite = !readOnly && (isAdmin || role === "employee");
+  // UI for adding list inline
+  const [addingList, setAddingList] = useState(false);
+  const [newListName, setNewListName] = useState("");
 
   function resetVisible(ls: List[]) {
     const v: Record<string, number> = {};
-    ls.forEach((l) => (v[l.list_id] = 10)); // 10 initially
+    ls.forEach((l) => (v[l.list_id] = 10));
     setVisibleMap(v);
   }
   function showMore(list_id: string, total: number) {
@@ -105,15 +102,20 @@ export default function KanbanPage() {
         : false
     ).length;
     const doneSubs = allCards.reduce(
-      (acc, c) => acc + (c.tasks || []).filter((t) => t.status === "done").length,
+      (acc, c) =>
+        acc + (c.tasks || []).filter((t) => t.status === "done").length,
       0
     );
     const done = doneCards + doneSubs;
     return total ? Math.round((done / total) * 100) : 0;
   }
 
-  // Normalize service response (real or fake) to our List/Card shape
-  function normalize(res: any): { lists: List[]; title: string; progress: number } {
+  // Normalize service response to our List/Card shape
+  function normalize(res: any): {
+    lists: List[];
+    title: string;
+    progress: number;
+  } {
     const rawLists = Array.isArray(res) ? res : res?.lists || [];
     const lists: List[] = rawLists
       .map((l: any) => {
@@ -139,17 +141,25 @@ export default function KanbanPage() {
                   typeof s.assigneeId === "number" ? s.assigneeId : undefined,
               }))
             : [],
+          startDate: c.startDate ?? null,
+          endDate: c.endDate ?? null,
+          tags: Array.isArray(c.tags)
+            ? c.tags.map((t: any) => ({
+                id: t.id ?? t.tagid ?? String(t.title),
+                title: String(t.title ?? t.name ?? ""),
+                color: t.color,
+              }))
+            : [],
         }));
         return { list_id, list_name, position, cards };
       })
-      .sort((a, b) => a.position - b.position)
-      .map((l) => ({
+      .sort((a: List, b: List) => a.position - b.position)
+      .map((l: List) => ({
         ...l,
-        cards: l.cards.sort((a, b) => a.position - b.position),
+        cards: l.cards.slice().sort((a: Card, b: Card) => a.position - b.position),
       }));
 
     const title = String(res?.board?.title ?? "Kanban");
-    // prefer API progress, else compute here
     const prog =
       typeof res?.progress === "number"
         ? res.progress
@@ -162,15 +172,14 @@ export default function KanbanPage() {
     if (!fkboardid) return;
     try {
       setLoading(true);
-      const res = await fetchKanbanList(fkboardid);
+      const res = await kanbanApi.fetchKanbanList(fkboardid);
       const norm = normalize(res);
       setLists(norm.lists);
       setBoardTitle(norm.title || "Kanban");
       setProgress(norm.progress ?? 0);
       resetVisible(norm.lists);
 
-      // load members for assignee labels
-      const m = await fetchAllMembers().catch(() => null);
+      const m = await kanbanApi.fetchAllMembers().catch(() => null as any);
       if (m?.data) setMembers(m.data);
     } catch {
       toast.error("Failed to load kanban");
@@ -185,71 +194,125 @@ export default function KanbanPage() {
   }, [fkboardid]);
 
   // === Add list (admin only, max 6) ===
-  async function addList() {
-    if (!isAdmin) return;
+  async function submitNewList() {
+    if (!isAdmin || !newListName.trim()) return;
     if (lists.length >= 6) {
       toast.error("Max lists is 6");
       return;
     }
-    const name = prompt("New list name", "New list");
-    if (!name) return;
     try {
-      const res = await AddKanbanList(
-        name,
+      const res = await kanbanApi.AddKanbanList(
+        newListName.trim(),
         fkboardid!,
         "205-Osama Ahmed",
         205,
         1001
       );
-      // support both fake/real shapes
-      const newList = {
-        list_id: String(res?.data?.list_id ?? res?.data?.id),
-        list_name: name,
-        position: Number(res?.data?.position ?? res?.data?.seq ?? lists.length),
-        cards: [] as Card[],
+      const newList: List = {
+        list_id: String(res?.data?.list_id ?? "default-list-id"),
+        list_name: newListName.trim(),
+        position: Number(res?.data?.position ?? lists.length),
+        cards: [],
       };
       const next = [...lists, newList].sort((a, b) => a.position - b.position);
       setLists(next);
       setVisibleMap((m) => ({ ...m, [newList.list_id]: 10 }));
+      setNewListName("");
+      setAddingList(false);
       toast.success("List added");
     } catch {
       toast.error("Failed to add list");
     }
   }
 
-  // === Add card (admin only) ===
-  async function addCard(list_id: string) {
+  // === Delete list ===
+  async function deleteList(list_id: string) {
     if (!isAdmin) return;
-    const title = prompt("Card title", "New card");
-    if (!title) return;
-    try {
-      const listNum = Number(list_id);
-      const payloadListId = Number.isFinite(listNum)
-        ? listNum
-        : ((list_id as unknown) as any);
 
-      const res = await AddCard(
-        title,
-        payloadListId,
+    try {
+      if (typeof (kanbanApi as any).DeleteKanbanList === "function") {
+        await (kanbanApi as any).DeleteKanbanList(list_id, fkboardid);
+      }
+      setLists((prev) => prev.filter((l) => l.list_id !== list_id));
+      toast.success("List deleted");
+    } catch {
+      toast.error("Failed to delete list");
+    }
+  }
+
+  // === Open drawer in CREATE mode ===
+  function openCreateDrawer(list_id: string) {
+    if (!isAdmin) return;
+    setCreateTargetListId(list_id);
+    setActiveCard(null);
+    setDrawerMode("create");
+    setDrawerOpen(true);
+  }
+
+  // === Called by Drawer on "Save" in create mode ===
+  async function createCardFromDrawer(payload: {
+    title: string;
+    description?: string;
+    startDate?: string | null;
+    endDate?: string | null;
+    imageFile?: File | null;
+    tags?: { title: string; color?: string }[];
+  }) {
+    if (!isAdmin || !createTargetListId) return;
+    try {
+      // 1) Create the card (title only)
+      const created = await kanbanApi.AddCard(
+        payload.title.trim() || "New card",
+        createTargetListId,
         "205-Osama Ahmed",
         205,
-        fkboardid as any,
-        1001 as any
+        fkboardid as any
       );
 
+      const newCardId = String(created?.data?.card_id ?? created?.data?.id);
       const newCard: Card = {
-        card_id: String(res?.data?.card_id ?? res?.data?.id),
-        list_id,
-        title,
-        description: "",
-        position: Number(res?.data?.position ?? res?.data?.seq ?? 0),
+        card_id: newCardId,
+        list_id: createTargetListId,
+        title: payload.title.trim() || "New card",
+        description: payload.description || "",
+        position: Number(created?.data?.position ?? created?.data?.seq ?? 0),
         imageUrl: null,
         tasks: [],
+        startDate: payload.startDate ?? null,
+        endDate: payload.endDate ?? null,
+        tags: [],
       };
 
+      // 2) Apply desc/dates/image via EditCard
+      const fd = new FormData();
+      fd.append("fkboardid", fkboardid as string);
+      fd.append("listid", createTargetListId);
+      fd.append("kanbanCardId", newCardId);
+      if (newCard.title) fd.append("title", newCard.title);
+      if (newCard.description) fd.append("desc", newCard.description);
+      if (newCard.startDate) fd.append("startDate", newCard.startDate);
+      if (newCard.endDate) fd.append("endDate", newCard.endDate);
+      if (payload.imageFile) fd.append("uploadImage", payload.imageFile);
+
+      await kanbanApi.EditCard(fd);
+
+      // 3) Tags (optional)
+      if (payload.tags?.length && typeof (kanbanApi as any).AddTag === "function") {
+        for (const t of payload.tags) {
+          await (kanbanApi as any).AddTag(
+            t.title,
+            t.color || "#a3a3a3",
+            newCardId,
+            "User",
+            205
+          );
+        }
+      }
+
+      // 4) Update UI & close
       setLists((prev) =>
         prev.map((l) =>
-          l.list_id === list_id
+          l.list_id === createTargetListId
             ? {
                 ...l,
                 cards: [...l.cards, newCard].sort(
@@ -259,105 +322,55 @@ export default function KanbanPage() {
             : l
         )
       );
-      toast.success("Card added");
+      setDrawerOpen(false);
+      setCreateTargetListId(null);
+      toast.success("Card created");
     } catch {
-      toast.error("Failed to add card");
+      toast.error("Failed to create card");
     }
   }
 
-  // === File upload ≤ 5MB (admin or assigned employee) ===
-  async function uploadImage(list_id: string, card: Card, file: File) {
-    if (!canWrite || !canEditCard(card)) return;
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File too large (max 5MB)");
-      return;
-    }
+  // === Open drawer in EDIT mode ===
+  function openEditDrawer(card: Card) {
+    setActiveCard(card);
+    setDrawerMode("edit");
+    setDrawerOpen(true);
+  }
+
+  // === Save edits from drawer ===
+  async function afterEditSaved() {
+    await load();
+  }
+
+  // === Delete card ===
+  async function deleteCard(cardId: string, list_id: string) {
     try {
-      const fd = new FormData();
-      fd.append("fkboardid", fkboardid as string);
-      fd.append("listid", list_id);
-      fd.append("kanbanCardId", card.card_id);
-      fd.append("uploadImage", file);
-      const res = await EditCard(fd);
-      if ((res as any)?.status === 413) {
-        toast.error("File too large (max 5MB)");
-        return;
+      if (typeof (kanbanApi as any).DeleteCard === "function") {
+        await (kanbanApi as any).DeleteCard(cardId, fkboardid);
       }
-      await load(); // refresh to show preview
-    } catch {
-      toast.error("Image upload failed");
-    }
-  }
-
-  // === Subtasks (assignments) ===
-  async function addSubtask(card: Card, list_id: string) {
-    if (!canWrite || !canEditCard(card)) return;
-    const taskName = prompt("Subtask name", "New task");
-    if (!taskName) return;
-
-    // quick assignee select (prompt). Replace with a select UI later
-    const assignee =
-      prompt(
-        `Assignee ID\n${members
-          .map((m) => `${m.id} = ${m.name}`)
-          .join("\n")}`,
-        String(currentUserId)
-      ) || String(currentUserId);
-
-    try {
-      await AddTask(
-        taskName,
-        Number(card.card_id) || ((card.card_id as unknown) as any),
-        "User",
-        currentUserId,
-        assignee, // API expects string
-        fkboardid as any,
-        1001 as any
+      setLists((prev) =>
+        prev.map((l) =>
+          l.list_id === list_id
+            ? { ...l, cards: l.cards.filter((c) => c.card_id !== cardId) }
+            : l
+        )
       );
-      await load();
+      toast.success("Card deleted");
     } catch {
-      toast.error("Failed to add subtask");
+      toast.error("Failed to delete card");
     }
   }
 
-  async function toggleSubtask(card: Card, task: Task) {
-    const canEdit =
-      isAdmin || (!!task.assigneeId && task.assigneeId === currentUserId);
-    if (!canWrite || !canEdit) return;
-    try {
-      const fd = new FormData();
-      fd.append("fkboardid", fkboardid as string);
-      fd.append("cardId", String(card.card_id));
-      fd.append("taskId", String(task.task_id));
-      fd.append("completed", String(task.status !== "done"));
-      await SubmitTask(fd);
-      await load();
-    } catch {
-      toast.error("Failed to update subtask");
-    }
-  }
-
-  async function deleteSubtask(taskId: string) {
-    if (!canWrite) return;
-    try {
-      await DeleteTask(Number(taskId) || ((taskId as unknown) as any));
-      await load();
-    } catch {
-      toast.error("Failed to delete subtask");
-    }
-  }
-
-  // === Share (public read-only) ===
+  // === Share / Close ===
   async function share() {
     try {
       let publicPath = `/kanbanList/${fkboardid}?view=public`;
       try {
-        const anyFn = getShareLinkApi as any;
-        if (typeof anyFn === "function") {
-          const r = await anyFn(fkboardid);
-          if (r?.data) publicPath = r.data;
-        }
+        const r =
+          typeof (kanbanApi as any).getShareLink === "function"
+            ? await (kanbanApi as any).getShareLink(fkboardid)
+            : null;
+        if (r?.data) publicPath = r.data;
       } catch {}
       await navigator.clipboard.writeText(location.origin + publicPath);
       toast.success("Share link copied");
@@ -366,12 +379,12 @@ export default function KanbanPage() {
     }
   }
 
-  // === Close board (admin-only when 100%) ===
   async function closeBoard() {
     if (!isAdmin || progress < 100) return;
     try {
-      const anyFn = closeBoardApi as any;
-      if (typeof anyFn === "function") await anyFn(fkboardid);
+      if (typeof (kanbanApi as any).closeBoard === "function") {
+        await (kanbanApi as any).closeBoard(fkboardid);
+      }
       toast.success("Board closed");
       await load();
     } catch {
@@ -398,15 +411,14 @@ export default function KanbanPage() {
       setLists(reindexed);
 
       try {
-        await useOnDragEndList(
+        await kanbanApi.useOnDragEndList(
           moved.list_id as any,
           srcIndex,
           reindexed[dstIndex].list_id as any,
           dstIndex,
           "Admin",
           "reorder",
-          fkboardid as any,
-          1001 as any
+          fkboardid as any
         );
       } catch {
         toast.error("List reorder failed");
@@ -435,7 +447,7 @@ export default function KanbanPage() {
       );
 
       try {
-        await useOnDragEndCard(
+        await kanbanApi.useOnDragEndCard(
           start.list_id as any,
           finish.list_id as any,
           draggableId as any,
@@ -443,8 +455,7 @@ export default function KanbanPage() {
           "Admin",
           source.index,
           destination.index,
-          fkboardid as any,
-          1001 as any
+          fkboardid as any
         );
       } catch {
         toast.error("Card reorder failed");
@@ -480,7 +491,7 @@ export default function KanbanPage() {
     );
 
     try {
-      await useOnDragEndCard(
+      await kanbanApi.useOnDragEndCard(
         start.list_id as any,
         finish.list_id as any,
         draggableId as any,
@@ -488,8 +499,7 @@ export default function KanbanPage() {
         "Admin",
         source.index,
         destination.index,
-        fkboardid as any,
-        1001 as any
+        fkboardid as any
       );
     } catch {
       toast.error("Card move failed");
@@ -511,12 +521,33 @@ export default function KanbanPage() {
     );
   }, [progress]);
 
+  // NEW: When drawer picks a file, instantly update that card’s cover
+  // below your other functions
+function handleLocalCoverPreview(p: { cardId?: string; listId?: string; dataUrl: string }) {
+  if (!p.cardId || !p.listId) return;
+  setLists(prev =>
+    prev.map(l =>
+      l.list_id === p.listId
+        ? {
+            ...l,
+            cards: l.cards.map(c =>
+              c.card_id === p.cardId ? { ...c, imageUrl: p.dataUrl } : c
+            ),
+          }
+        : l
+    )
+  );
+}
+
+
+
+
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       {/* Header */}
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{boardTitle}</h1>
-        <div className="flex items-center gap-2">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-lg font-semibold sm:text-xl">{boardTitle}</h1>
+        <div className="flex flex-wrap items-center gap-2">
           {headerProgressBar}
           <button
             onClick={share}
@@ -535,17 +566,49 @@ export default function KanbanPage() {
           >
             Close board
           </button>
-          <button
-            onClick={addList}
-            disabled={!isAdmin || lists.length >= 6}
-            className={`rounded border px-3 py-1 text-xs ${
-              !isAdmin || lists.length >= 6
-                ? "cursor-not-allowed opacity-50"
-                : "hover:bg-gray-50"
-            }`}
-          >
-            + Add list
-          </button>
+
+          {/* Add list inline (max 6) */}
+          {!addingList ? (
+            <button
+              onClick={() => {
+                if (!isAdmin || lists.length >= 6) return;
+                setAddingList(true);
+              }}
+              disabled={!isAdmin || lists.length >= 6}
+              className={`rounded border px-3 py-1 text-xs ${
+                !isAdmin || lists.length >= 6
+                  ? "cursor-not-allowed opacity-50"
+                  : "hover:bg-gray-50"
+              }`}
+            >
+              + Add list
+            </button>
+          ) : (
+            <div className="flex items-center gap-1">
+              <input
+                autoFocus
+                value={newListName}
+                onChange={(e) => setNewListName(e.target.value)}
+                placeholder="New list name"
+                className="w-40 rounded border px-2 py-1 text-xs"
+              />
+              <button
+                onClick={submitNewList}
+                className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => {
+                  setNewListName("");
+                  setAddingList(false);
+                }}
+                className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -557,10 +620,10 @@ export default function KanbanPage() {
           <Droppable droppableId="board" direction="horizontal" type="COLUMN">
             {(provided) => (
               <div
-                className="flex gap-4 overflow-x-auto pb-4"
                 ref={provided.innerRef}
                 {...provided.droppableProps}
-              >
+                className="flex flex-wrap items-start gap-4"  
+                >
                 {lists.map((list, li) => (
                   <Draggable
                     draggableId={list.list_id}
@@ -572,31 +635,56 @@ export default function KanbanPage() {
                       <div
                         ref={p.innerRef}
                         {...p.draggableProps}
-                        className="w-72 shrink-0 rounded-lg border bg-white"
+                        className="flex min-w-[280px] flex-1 basis-[320px] max-w-[420px] flex-col rounded-lg border bg-white"
                       >
+                        {/* List header with drag-handle + ⋯ menu */}
                         <div
                           className="flex items-center justify-between border-b px-3 py-2"
                           {...p.dragHandleProps}
                         >
                           <div className="font-medium">{list.list_name}</div>
-                          <button
-                            onClick={() => addCard(list.list_id)}
-                            disabled={!isAdmin}
-                            className={`text-xs ${
-                              !isAdmin ? "opacity-50" : "hover:underline"
-                            }`}
-                          >
-                            + Card
-                          </button>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => openCreateDrawer(list.list_id)}
+                              disabled={!isAdmin}
+                              className={`text-xs ${
+                                !isAdmin ? "opacity-50" : "hover:underline"
+                              }`}
+                            >
+                              + Card
+                            </button>
+
+                            {/* ⋯ menu */}
+                            <div className="relative">
+                              <details className="group">
+                                <summary
+                                  className="cursor-pointer rounded px-1 py-0.5 text-xl leading-none hover:bg-gray-100"
+                                  title="More"
+                                >
+                                  ⋯
+                                </summary>
+                                <div className="absolute right-0 z-10 mt-1 w-36 rounded border bg-white p-1 text-sm shadow">
+                                  <button
+                                    onClick={() => deleteList(list.list_id)}
+                                    disabled={!isAdmin}
+                                    className="block w-full rounded px-2 py-1 text-left hover:bg-gray-50 disabled:opacity-50"
+                                  >
+                                    Delete list
+                                  </button>
+                                </div>
+                              </details>
+                            </div>
+                          </div>
                         </div>
 
-                        {/* Per-list infinite scroll */}
+                        {/* Cards – per-list infinite scroll */}
                         <Droppable droppableId={list.list_id} type="CARD">
                           {(drop) => (
                             <div
                               ref={drop.innerRef}
                               {...drop.droppableProps}
-                              className="space-y-2 p-3 max-h-[70vh] overflow-y-auto"
+                              className="max-h-[70vh] space-y-2 overflow-y-auto p-3"
                               onScroll={(e) => {
                                 const el = e.currentTarget;
                                 if (
@@ -621,118 +709,25 @@ export default function KanbanPage() {
                                         ref={dp.innerRef}
                                         {...dp.draggableProps}
                                         {...dp.dragHandleProps}
-                                        className="rounded border bg-white p-2 shadow-sm"
+                                        onClick={() => openEditDrawer(c)}
+                                        className="cursor-pointer rounded border bg-white p-2 shadow-sm hover:bg-gray-50"
                                       >
                                         <div className="text-sm font-medium">
                                           {c.title}
                                         </div>
                                         {c.description ? (
-                                          <div className="mt-1 text-xs text-gray-600">
+                                          <div className="mt-1 line-clamp-2 text-xs text-gray-600">
                                             {c.description}
                                           </div>
                                         ) : null}
-
-                                        {/* image preview */}
                                         {c.imageUrl ? (
                                           <img
                                             src={c.imageUrl}
-                                            className="mt-2 w-full rounded"
+                                            className="mt-2 w-full rounded object-cover"
+                                            style={{ height: 160 }}    // <-- clamp cover so it can't stretch other lists
                                             alt=""
                                           />
                                         ) : null}
-
-                                        {/* upload (admin or assigned employee) */}
-                                        {(isAdmin || canEditCard(c)) &&
-                                        !readOnly ? (
-                                          <label className="mt-2 inline-block cursor-pointer text-[11px] text-blue-600 hover:underline">
-                                            Upload image
-                                            <input
-                                              type="file"
-                                              accept="image/*"
-                                              className="hidden"
-                                              onChange={(e) => {
-                                                const f = e.target.files?.[0];
-                                                if (f)
-                                                  uploadImage(
-                                                    list.list_id,
-                                                    c,
-                                                    f
-                                                  );
-                                              }}
-                                            />
-                                          </label>
-                                        ) : null}
-
-                                        {/* Subtasks */}
-                                        {c.tasks && c.tasks.length > 0 && (
-                                          <div className="mt-2 space-y-1">
-                                            {c.tasks.map((t) => {
-                                              const canToggle =
-                                                isAdmin ||
-                                                t.assigneeId === currentUserId;
-                                              return (
-                                                <div
-                                                  key={t.task_id}
-                                                  className="flex items-center justify-between"
-                                                >
-                                                  <label className="flex items-center gap-2 text-xs">
-                                                    <input
-                                                      type="checkbox"
-                                                      checked={
-                                                        t.status === "done"
-                                                      }
-                                                      onChange={() =>
-                                                        toggleSubtask(c, t)
-                                                      }
-                                                      disabled={
-                                                        readOnly || !canToggle
-                                                      }
-                                                    />
-                                                    <span>
-                                                      {t.task_name}
-                                                    </span>
-                                                  </label>
-                                                  <div className="flex items-center gap-2">
-                                                    <span className="text-[11px] text-gray-500">
-                                                      {members.find(
-                                                        (m) =>
-                                                          m.id ===
-                                                          t.assigneeId
-                                                      )?.name ||
-                                                        "Unassigned"}
-                                                    </span>
-                                                    {canToggle && !readOnly ? (
-                                                      <button
-                                                        className="text-[11px] text-red-600 hover:underline"
-                                                        onClick={() =>
-                                                          deleteSubtask(
-                                                            t.task_id
-                                                          )
-                                                        }
-                                                      >
-                                                        delete
-                                                      </button>
-                                                    ) : null}
-                                                  </div>
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                        )}
-
-                                        {/* Add subtask */}
-                                        {(isAdmin || canEditCard(c)) &&
-                                        !readOnly ? (
-                                          <button
-                                            className="mt-2 text-[11px] text-blue-600 hover:underline"
-                                            onClick={() =>
-                                              addSubtask(c, list.list_id)
-                                            }
-                                          >
-                                            + Add subtask
-                                          </button>
-                                        ) : null}
-
                                         {/* mini subtask progress */}
                                         {c.tasks && c.tasks.length > 0 ? (
                                           <div className="mt-2 flex items-center gap-2">
@@ -779,6 +774,41 @@ export default function KanbanPage() {
           </Droppable>
         </DragDropContext>
       )}
+
+      {/* Drawer */}
+      <CardDrawer
+        open={drawerOpen}
+        mode={drawerMode}
+        card={
+          drawerMode === "edit" && activeCard
+            ? lists
+                .flatMap((l) => l.cards)
+                .find((c) => c.card_id === activeCard.card_id) || activeCard
+            : null
+        }
+        listIdForCreate={drawerMode === "create" ? createTargetListId : null}
+        onClose={() => {
+          setDrawerOpen(false);
+          setActiveCard(null);
+          setCreateTargetListId(null);
+        }}
+        onCreate={createCardFromDrawer}
+        onSaved={afterEditSaved}
+        onDelete={(cid, lid) => deleteCard(cid, lid)}
+        members={members}
+        readOnly={false}
+        isAdmin={isAdmin}
+        currentUserId={currentUserId}
+        EditCard={kanbanApi.EditCard}
+        AddTask={kanbanApi.AddTask}
+        SubmitTask={kanbanApi.SubmitTask}
+        DeleteTask={kanbanApi.DeleteTask}
+        AddTag={(kanbanApi as any).AddTag}
+        DeleteTag={(kanbanApi as any).DeleteTag}
+        fkboardid={fkboardid as string}
+        // NEW: instant cover update on file choose
+        onLocalCoverPreview={handleLocalCoverPreview}
+        />
     </div>
   );
 }

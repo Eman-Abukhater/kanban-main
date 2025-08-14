@@ -24,14 +24,23 @@ export type BoardRow = {
   fkpoid: number | null;   // fake “project/org” id
 };
 
-type Task = {
+export type Task = {
   task_id: string;
   task_name: string;
   status: "todo" | "done";
   assigneeId?: number;
 };
 
-type Card = {
+export type Tag = { id: string; title: string; color?: string };
+
+export type Comment = {
+  id: string;
+  author: string;     // can be "Anonymous"
+  message: string;
+  createdAt: string;  // ISO
+};
+
+export type Card = {
   card_id: string;
   list_id: string;
   title: string;
@@ -39,6 +48,10 @@ type Card = {
   position: number;
   imageUrl?: string | null;
   tasks?: Task[];
+  startDate?: string | null;
+  endDate?: string | null;
+  tags?: Tag[];
+  comments?: Comment[];
 };
 
 export type KbList = {
@@ -213,7 +226,6 @@ export async function DeleteBoard(boardid: number) {
 }
 
 export async function fetchProjects() {
-  // derive unique project titles
   const titles = Array.from(new Set(loadBoards().map((r) => r.title)));
   return { status: 200, data: titles.map((t, i) => ({ id: i + 1, name: t })) };
 }
@@ -252,7 +264,7 @@ export async function fetchKanbanList(fkboardid: string) {
   // compute progress: percent of cards in "Done"
   const progress = computeProgress(lists);
 
-  // keep board.progress roughly in sync (not required, but useful)
+  // keep board.progress roughly in sync
   if (board && board.progress !== progress) {
     board.progress = progress;
     saveBoards(all);
@@ -282,6 +294,18 @@ export async function AddKanbanList(
   return { status: 200, data: created };
 }
 
+export async function DeleteKanbanList(
+  list_id: string,
+  fkboardid: string
+): Promise<Resp<{ deleted: string }>> {
+  const lists = loadKanban(fkboardid);
+  const next = lists.filter((l) => l.list_id !== list_id);
+  next.forEach((l, i) => (l.position = i));
+  saveKanban(fkboardid, next);
+  updateBoardProgress(fkboardid);
+  return { status: 200, data: { deleted: list_id } };
+}
+
 export async function AddCard(
   title: string,
   list_id: string,
@@ -301,11 +325,38 @@ export async function AddCard(
     position: lists[idx].cards.length,
     imageUrl: null,
     tasks: [],
+    startDate: null,
+    endDate: null,
+    tags: [],
+    comments: [],
   };
   lists[idx] = { ...lists[idx], cards: [...lists[idx].cards, newCard] };
   saveKanban(fkboardid, lists);
   updateBoardProgress(fkboardid);
   return { status: 200, data: newCard };
+}
+
+export async function DeleteCard(
+  card_id: string,
+  fkboardid: string
+): Promise<Resp<{ deleted: string }>> {
+  const lists = loadKanban(fkboardid);
+  let changed = false;
+  for (let i = 0; i < lists.length; i++) {
+    const before = lists[i].cards.length;
+    lists[i] = {
+      ...lists[i],
+      cards: lists[i].cards.filter((c) => c.card_id !== card_id),
+    };
+    if (lists[i].cards.length !== before) changed = true;
+    lists[i].cards.forEach((c, idx) => (c.position = idx));
+  }
+  if (changed) {
+    saveKanban(fkboardid, lists);
+    updateBoardProgress(fkboardid);
+    return { status: 200, data: { deleted: card_id } };
+  }
+  return { status: 404, data: { deleted: card_id } };
 }
 
 export async function useOnDragEndList(
@@ -362,8 +413,10 @@ export async function useOnDragEndCard(
   return { status: 200, data: lists };
 }
 
-/** ======= NEW: EditCard (title/desc/completed/image ≤ 5MB) ======= */
-export async function EditCard(editVM: FormData): Promise<Resp<Card> | { status: 413; data: null }> {
+/** ======= EditCard (title/desc/completed/image ≤ 5MB + dates) ======= */
+export async function EditCard(
+  editVM: FormData
+): Promise<Resp<Card> | { status: 413; data: null }> {
   const fkboardid = String(editVM.get("fkboardid") ?? "");
   const listId = String(editVM.get("listid") ?? "");
   const cardId = String(editVM.get("kanbanCardId") ?? "");
@@ -371,12 +424,13 @@ export async function EditCard(editVM: FormData): Promise<Resp<Card> | { status:
   const title = editVM.get("title");
   const desc = editVM.get("desc");
   const completed = editVM.get("completed"); // "true"/"false"
+  const startDate = editVM.get("startDate");
+  const endDate = editVM.get("endDate");
   const file = editVM.get("uploadImage") as File | null;
 
   const lists = loadKanban(fkboardid);
   const li = lists.findIndex((l) => l.list_id === listId);
   if (li === -1) return { status: 404, data: null as any };
-
   const ci = lists[li].cards.findIndex((c) => c.card_id === cardId);
   if (ci === -1) return { status: 404, data: null as any };
 
@@ -392,6 +446,10 @@ export async function EditCard(editVM: FormData): Promise<Resp<Card> | { status:
   }
   if (typeof title === "string") card.title = title;
   if (typeof desc === "string") card.description = desc;
+
+  // dates
+  if (typeof startDate === "string") card.startDate = startDate || null;
+  if (typeof endDate === "string") card.endDate = endDate || null;
 
   // completed flag: if provided and true & card has tasks, mark all done
   if (typeof completed === "string") {
@@ -410,7 +468,7 @@ export async function EditCard(editVM: FormData): Promise<Resp<Card> | { status:
   return { status: 200, data: card };
 }
 
-/** ======= NEW: AddTask (subtask with assignee) ======= */
+/** ======= Subtasks ======= */
 export async function AddTask(
   title: string,
   fkKanbanCardId: number | string,
@@ -443,7 +501,6 @@ export async function AddTask(
   return { status: 200, data: task };
 }
 
-/** ======= NEW: SubmitTask (toggle completed) ======= */
 export async function SubmitTask(submitVM: FormData): Promise<Resp<Task>> {
   const fkboardid = String(submitVM.get("fkboardid") ?? "");
   const cardId = String(submitVM.get("cardId") ?? "");
@@ -467,29 +524,23 @@ export async function SubmitTask(submitVM: FormData): Promise<Resp<Task>> {
   return { status: 200, data: updated };
 }
 
-/** ======= NEW: DeleteTask ======= */
-export async function DeleteTask(taskid: number | string): Promise<Resp<{ deleted: string }>> {
+export async function DeleteTask(
+  taskid: number | string
+): Promise<Resp<{ deleted: string }>> {
   const tid = String(taskid);
-
-  // We must search all boards? No—caller passes fkboardid in page flow before reload.
-  // Search all boards' kanban stores could be expensive; we’ll scan current open board in UI.
-  // Here, we’ll try all boards (safe for fake/local).
   const boards = loadBoards();
   for (const b of boards) {
     const lists = loadKanban(b.fkboardid);
     let changed = false;
     for (let li = 0; li < lists.length; li++) {
       const l = lists[li];
-      const before = (l.cards || []).map((c) => c.tasks?.length || 0).reduce((a, n) => a + n, 0);
-      lists[li] = {
-        ...l,
-        cards: l.cards.map((c) => ({
-          ...c,
-          tasks: (c.tasks || []).filter((t) => t.task_id !== tid),
-        })),
-      };
-      const after = lists[li].cards.map((c) => c.tasks?.length || 0).reduce((a, n) => a + n, 0);
-      if (after !== before) changed = true;
+      const newCards = l.cards.map((c) => {
+        const before = (c.tasks || []).length;
+        const afterTasks = (c.tasks || []).filter((t) => t.task_id !== tid);
+        if (before !== afterTasks.length) changed = true;
+        return { ...c, tasks: afterTasks };
+      });
+      lists[li] = { ...l, cards: newCards };
     }
     if (changed) {
       saveKanban(b.fkboardid, lists);
@@ -500,15 +551,85 @@ export async function DeleteTask(taskid: number | string): Promise<Resp<{ delete
   return { status: 404, data: { deleted: tid } };
 }
 
-/** ======= NEW: Share link (public read-only) ======= */
+/** ======= Tags ======= */
+export async function AddTag(
+  title: string,
+  color: string,
+  fkKanbanCardId: number | string,
+  addedby: string,
+  addedbyid: number | null
+): Promise<Resp<Tag>> {
+  const boards = loadBoards();
+  for (const b of boards) {
+    const lists = loadKanban(b.fkboardid);
+    const loc = findCard(lists, String(fkKanbanCardId));
+    if (!loc) continue;
+
+    const tag: Tag = { id: uuid(), title, color };
+    const target = lists[loc.listIndex].cards[loc.cardIndex];
+    target.tags = [...(target.tags || []), tag];
+
+    saveKanban(b.fkboardid, lists);
+    return { status: 200, data: tag };
+  }
+  return { status: 404, data: null as any };
+}
+
+export async function DeleteTag(
+  tagid: number | string
+): Promise<Resp<{ deleted: string }>> {
+  const tid = String(tagid);
+  const boards = loadBoards();
+  for (const b of boards) {
+    const lists = loadKanban(b.fkboardid);
+    let changed = false;
+    for (let li = 0; li < lists.length; li++) {
+      const l = lists[li];
+      const newCards = l.cards.map((c) => {
+        const before = (c.tags || []).length;
+        const afterTags = (c.tags || []).filter((t) => String(t.id) !== tid);
+        if (before !== afterTags.length) changed = true;
+        return { ...c, tags: afterTags };
+      });
+      lists[li] = { ...l, cards: newCards };
+    }
+    if (changed) {
+      saveKanban(b.fkboardid, lists);
+      return { status: 200, data: { deleted: tid } };
+    }
+  }
+  return { status: 404, data: { deleted: tid } };
+}
+
+/** ======= Comments ======= */
+export async function AddComment(
+  fkboardid: string,
+  cardId: string,
+  author: string,
+  message: string
+): Promise<Resp<Comment>> {
+  const lists = loadKanban(fkboardid);
+  const loc = findCard(lists, cardId);
+  if (!loc) return { status: 404, data: null as any };
+  const c: Comment = {
+    id: uuid(),
+    author: author?.trim() || "Anonymous",
+    message,
+    createdAt: new Date().toISOString(),
+  };
+  const target = lists[loc.listIndex].cards[loc.cardIndex];
+  target.comments = [...(target.comments || []), c];
+  saveKanban(fkboardid, lists);
+  return { status: 200, data: c };
+}
+
+/** ======= Share & Close ======= */
 export async function getShareLink(
   fkboardid: string
 ): Promise<Resp<string>> {
-  // In real backend, you might create a tokenized URL. Here, we just return public view path.
   return { status: 200, data: `/kanbanList/${fkboardid}?view=public` };
 }
 
-/** ======= NEW: Close board ======= */
 export async function closeBoard(
   fkboardid: string
 ): Promise<Resp<{ status: "closed" }>> {
