@@ -1,12 +1,8 @@
-
-import Lottie from "lottie-react";
+import dynamic from "next/dynamic";
+const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 import animationLoad1 from "../../public/animationDenied.json";
 
-
-
 export default function umAuthorized() {
-
-
   return (
     <>
       <div className="flex h-screen flex-col bg-gray-100">
@@ -15,7 +11,6 @@ export default function umAuthorized() {
             <Lottie animationData={animationLoad1} loop={true} />
           </div>
         </div>
-
       </div>
     </>
   );

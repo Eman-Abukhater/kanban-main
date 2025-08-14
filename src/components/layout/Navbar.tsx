@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import ThemeSwitch from "./ThemeSwitch";
-import Lottie from "lottie-react";
+import dynamic from "next/dynamic";
+const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 import animationRocket from "../../../public/animationRocket.json";
 import animationBack from "../../../public/animationBack.json";
 import { useRouter } from "next/router";
@@ -34,9 +35,7 @@ export function Navbar(props: INavbarProps) {
       );
     }
   };
-  const {
-    userInfo,
-  } = useContext(KanbanContext);
+  const { userInfo } = useContext(KanbanContext);
 
   useEffect(() => {
     window.onscroll = onScroll;
@@ -66,25 +65,27 @@ export function Navbar(props: INavbarProps) {
                 <Lottie animationData={animationRocket} loop={true} />
               </div>
             </span>
-            <span className="hidden md:inline">ESAP Task Board {userInfo?.fkboardid}: "{userInfo?.boardTitle}" </span>
+            <span className="hidden md:inline">
+              ESAP Task Board {userInfo?.fkboardid}: "{userInfo?.boardTitle}"{" "}
+            </span>
           </h1>
           <div className="flex items-center gap-5">
             <button
-            onClick={() => {
-              router.back();
-            }}
+              onClick={() => {
+                router.back();
+              }}
               type="button"
               aria-label="toggle theme"
               className="rounded-md transition hover:bg-zinc-900/5 dark:hover:bg-white/5"
               style={{ marginRight: "70px", marginTop: "4px" }}
             >
               <div
-              className="font-bold dark:text-slate-300"
+                className="font-bold dark:text-slate-300"
                 style={{
-                  marginTop: '-16px',
-                  marginRight: '-35px',
-                  height: '10px',
-                  width: '32px'
+                  marginTop: "-16px",
+                  marginRight: "-35px",
+                  height: "10px",
+                  width: "32px",
                 }}
               >
                 <Lottie animationData={animationBack} loop={true} />

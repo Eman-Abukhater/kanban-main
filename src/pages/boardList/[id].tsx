@@ -9,8 +9,8 @@ import {
 } from "../../services/kanbanApi";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
-import Lottie from "lottie-react";
-//import animation_space from "../../../public/animation_space.json";
+import dynamic from "next/dynamic";
+const Lottie = dynamic(() => import("lottie-react"), { ssr: false }); //import animation_space from "../../../public/animation_space.json";
 import animation_space from "../../../public/animationTeam2.json";
 import animationSettings from "../../../public/animationNote.json";
 import KanbanContext from "../../context/kanbanContext";
@@ -88,7 +88,7 @@ export default function getBoardList() {
 
     if (!signalRConnection || signalRConnection === undefined) {
       if (!userInfo) return;
-      console.log('this keeps hitting');
+      console.log("this keeps hitting");
       //make signalR connection function
       const joinRoom = async (
         userid: string,
@@ -116,7 +116,6 @@ export default function getBoardList() {
             setUsersOnline(users);
           });
 
-
           //join the board with the group of po id
           const param = {
             fkpoid: fkpoid?.toString(),
@@ -135,8 +134,8 @@ export default function getBoardList() {
       joinRoom(userInfo.userid, userInfo.fkpoid, userInfo.username); // Invoke the JoinBoardGroup method
     }
 
-     // listen to ginalR for new Updates
-     if (signalRConnection) {
+    // listen to ginalR for new Updates
+    if (signalRConnection) {
       signalRConnection.on("addEditBoard", async (message) => {
         toast.info(`${message}`, {
           position: toast.POSITION.TOP_RIGHT,
@@ -160,7 +159,6 @@ export default function getBoardList() {
         signalRConnection.off("addEditBoard");
       }
     };
-
   }, []);
 
   const openEditModal = (board: any) => {
