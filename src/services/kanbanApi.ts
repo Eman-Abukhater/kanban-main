@@ -1,5 +1,22 @@
 import { v4 as uuid } from "uuid";
 
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
+
+async function http<T>(url: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      ...(opts?.headers || {}),
+    },
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<T>;
+}
+
 /** ======= Seed + Types ======= */
 const FAKE_MEMBERS = [
   { id: 205, name: "Osama Ahmed" },
@@ -164,10 +181,10 @@ function readFileAsDataURL(file: File): Promise<string> {
 export async function fetchInitialBoards(
   fkpoid: number | null
 ): Promise<Resp<BoardRow[]>> {
-  const rows = loadBoards().filter((r) => fkpoid == null || r.fkpoid === fkpoid);
-  return { status: 200, data: rows };
+  if (fkpoid == null) return { status: 200, data: [] as BoardRow[] };
+  const data = await http<BoardRow[]>(`/projects/${fkpoid}/boards`);
+  return { status: 200, data };
 }
-
 export async function AddBoard(
   projectName: string,
   fkpoid: number | null,
@@ -175,33 +192,19 @@ export async function AddBoard(
   addedby: string,
   options?: { description?: string; memberIds?: number[] }
 ): Promise<Resp<BoardRow>> {
-  const rows = loadBoards();
-  const fkboardid = uuid();
-  const members =
-    (options?.memberIds || [])
-      .map((id) => FAKE_MEMBERS.find((m) => m.id === id))
-      .filter(Boolean) as Member[];
-  const row: BoardRow = {
-    boardid: rows.length ? Math.max(...rows.map((r) => r.boardid)) + 1 : 1,
-    fkboardid,
-    title: projectName,
-    description: options?.description || "",
-    members,
-    status: "open",
-    progress: 0,
-    createdAt: new Date().toISOString(),
-    addedby,
-    addedbyid,
+  const body = {
+    projectName,
     fkpoid,
+    addedbyid,
+    addedby,
+    description: options?.description || "",
+    memberIds: options?.memberIds || []
   };
-  saveBoards([row, ...rows]);
-  // seed default lists for this board
-  saveKanban(fkboardid, [
-    { list_id: uuid(), list_name: "To-do", position: 0, cards: [] },
-    { list_id: uuid(), list_name: "In-progress", position: 1, cards: [] },
-    { list_id: uuid(), list_name: "Done", position: 2, cards: [] },
-  ]);
-  return { status: 200, data: row };
+  const data = await http<BoardRow>(`/boards`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  return { status: 200, data };
 }
 
 export async function EditBoard(
@@ -209,50 +212,49 @@ export async function EditBoard(
   boardid: number | null,
   updatedby: string
 ): Promise<Resp<{ boardid: number | null; updatedBy: string }>> {
-  const rows = loadBoards();
-  const idx = rows.findIndex((r) => r.boardid === boardid);
-  if (idx >= 0) rows[idx].title = title;
-  saveBoards(rows);
+  if (boardid == null) return { status: 400, data: { boardid, updatedBy: updatedby } as any };
+  // just reuse the same PATCH endpoint you already built
+  await http(`/boards/${boardid}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
   return { status: 200, data: { boardid, updatedBy: updatedby } };
 }
 
+
 export async function DeleteBoard(boardid: number) {
-  const rows = loadBoards();
-  const row = rows.find((r) => r.boardid === boardid);
-  const next = rows.filter((r) => r.boardid !== boardid);
-  saveBoards(next);
-  if (row) localStorage.removeItem(kbKeyFor(row.fkboardid));
-  return { status: 200, data: { deleted: boardid } };
+  const data = await http<{ deleted: number }>(`/boards/${boardid}`, {
+    method: "DELETE",
+  });
+  return { status: 200, data };
+}
+export async function fetchProjects() {
+  const data = await http<{ id: number; name: string }[]>(`/projects`);
+  return { status: 200, data };
 }
 
-export async function fetchProjects() {
-  const titles = Array.from(new Set(loadBoards().map((r) => r.title)));
-  return { status: 200, data: titles.map((t, i) => ({ id: i + 1, name: t })) };
-}
 
 export async function fetchAllMembers(): Promise<Resp<Member[]>> {
-  return { status: 200, data: FAKE_MEMBERS };
+  const data = await http<Member[]>(`/members`);
+  return { status: 200, data };
 }
 
 export async function UpdateBoardFields(
   boardid: number,
-  patch: Partial<
-    Pick<BoardRow, "title" | "description" | "members" | "progress">
-  > & { memberIds?: number[] }
+  patch: Partial<Pick<BoardRow, "title" | "description" | "members" | "progress">> & { memberIds?: number[] }
 ) {
-  const rows = loadBoards();
-  const idx = rows.findIndex((r) => r.boardid === boardid);
-  if (idx === -1) return { status: 404, data: null as any };
+  // The backend ignores "members" array and expects "memberIds"
+  const body: any = {};
+  if (typeof patch.title === "string") body.title = patch.title;
+  if (typeof patch.description === "string") body.description = patch.description;
+  if (typeof patch.progress === "number") body.progress = patch.progress;
+  if (Array.isArray((patch as any).memberIds)) body.memberIds = (patch as any).memberIds;
 
-  if (patch.memberIds) {
-    patch.members = patch.memberIds
-      .map((id) => FAKE_MEMBERS.find((m) => m.id === id))
-      .filter(Boolean) as Member[];
-    delete patch.memberIds;
-  }
-  rows[idx] = { ...rows[idx], ...patch };
-  saveBoards(rows);
-  return { status: 200, data: rows[idx] };
+  const data = await http<BoardRow>(`/boards/${boardid}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  return { status: 200, data };
 }
 
 /** ======= Kanban APIs (lists + cards) ======= */
