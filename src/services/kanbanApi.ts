@@ -259,215 +259,75 @@ export async function UpdateBoardFields(
 
 /** ======= Kanban APIs (lists + cards) ======= */
 export async function fetchKanbanList(fkboardid: string) {
-  const all = loadBoards();
-  const board = all.find((b) => b.fkboardid === fkboardid);
-  const lists = loadKanban(fkboardid).sort((a, b) => a.position - b.position);
-
-  // compute progress: percent of cards in "Done"
-  const progress = computeProgress(lists);
-
-  // keep board.progress roughly in sync
-  if (board && board.progress !== progress) {
-    board.progress = progress;
-    saveBoards(all);
-  }
-
-  return {
-    lists,
-    board: { title: board?.title || "Kanban", fkboardid, status: board?.status || "open" },
-    progress,
-  };
+  return http<any>(`/boards/${fkboardid}/kanban`);
+}
+// Add list
+export async function AddKanbanList(title: string, fkboardid: string, addedby: string, addedbyid: number) {
+  const data = await http(`/boards/${fkboardid}/lists`, {
+    method: "POST",
+    body: JSON.stringify({ list_name: title }),
+  });
+  return { status: 200, data };
 }
 
-export async function AddKanbanList(
-  title: string,
-  fkboardid: string,
-  addedby: string,
-  addedbyid: number,
-  fkpoid?: number
-) {
-  const lists = loadKanban(fkboardid);
-  const next = [
-    ...lists,
-    { list_id: uuid(), list_name: title, position: lists.length, cards: [] },
-  ];
-  saveKanban(fkboardid, next);
-  const created = next[next.length - 1];
-  return { status: 200, data: created };
+// Delete list
+export async function DeleteKanbanList(list_id: string, fkboardid: string) {
+  const data = await http(`/lists/${list_id}`, { method: "DELETE" });
+  return { status: 200, data };
 }
 
-export async function DeleteKanbanList(
-  list_id: string,
-  fkboardid: string
-): Promise<Resp<{ deleted: string }>> {
-  const lists = loadKanban(fkboardid);
-  const next = lists.filter((l) => l.list_id !== list_id);
-  next.forEach((l, i) => (l.position = i));
-  saveKanban(fkboardid, next);
-  updateBoardProgress(fkboardid);
-  return { status: 200, data: { deleted: list_id } };
+// Add card
+export async function AddCard(title: string, list_id: string, addedby: string, addedbyid: number, fkboardid: string) {
+  const data = await http(`/lists/${list_id}/cards`, {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  });
+  return { status: 200, data };
 }
 
-export async function AddCard(
-  title: string,
-  list_id: string,
-  addedby: string,
-  addedbyid: number,
-  fkboardid: string,
-) {
-  const lists = loadKanban(fkboardid);
-  const idx = lists.findIndex((l) => l.list_id === list_id);
-  if (idx === -1) return { status: 404, data: null as any };
-
-  const newCard: Card = {
-    card_id: uuid(),
-    list_id,
-    title,
-    description: "",
-    position: lists[idx].cards.length,
-    imageUrl: null,
-    tasks: [],
-    startDate: null,
-    endDate: null,
-    tags: [],
-    comments: [],
-  };
-  lists[idx] = { ...lists[idx], cards: [...lists[idx].cards, newCard] };
-  saveKanban(fkboardid, lists);
-  updateBoardProgress(fkboardid);
-  return { status: 200, data: newCard };
+// Delete card
+export async function DeleteCard(card_id: string, fkboardid: string) {
+  const data = await http(`/cards/${card_id}`, { method: "DELETE" });
+  return { status: 200, data };
 }
 
-export async function DeleteCard(
-  card_id: string,
-  fkboardid: string
-): Promise<Resp<{ deleted: string }>> {
-  const lists = loadKanban(fkboardid);
-  let changed = false;
-  for (let i = 0; i < lists.length; i++) {
-    const before = lists[i].cards.length;
-    lists[i] = {
-      ...lists[i],
-      cards: lists[i].cards.filter((c) => c.card_id !== card_id),
-    };
-    if (lists[i].cards.length !== before) changed = true;
-    lists[i].cards.forEach((c, idx) => (c.position = idx));
-  }
-  if (changed) {
-    saveKanban(fkboardid, lists);
-    updateBoardProgress(fkboardid);
-    return { status: 200, data: { deleted: card_id } };
-  }
-  return { status: 404, data: { deleted: card_id } };
+// Drag lists
+export async function useOnDragEndList(draggedId: string, draggedSeqNo: number, destId: string, destSeqNo: number, updatedBy: string, action: string, fkboardid: string) {
+  // need board_id; fetch once or pass from UI. Quick way: call board by fk to get numeric id.
+  // For now front-end already reorders locally; backend just needs PATCH to persist if you have board_id.
+  // Optional: look up board_id server-side by fkboardid in /lists/reorder route.
+  return { status: 200, data: null as any };
 }
 
-export async function useOnDragEndList(
-  draggedId: string,
-  draggedSeqNo: number,
-  destId: string,
-  destSeqNo: number,
-  updatedBy: string,
-  action: string,
-  fkboardid: string
-) {
-  const lists = loadKanban(fkboardid);
-  const from = lists.findIndex((l) => l.list_id === draggedId);
-  const to = lists.findIndex((l) => l.list_id === destId);
-  if (from === -1 || to === -1) return { status: 404, data: null as any };
-
-  const next = Array.from(lists);
-  const [moved] = next.splice(from, 1);
-  next.splice(to, 0, moved);
-  next.forEach((l, i) => (l.position = i));
-  saveKanban(fkboardid, next);
-  return { status: 200, data: next };
+// Drag/move card
+export async function useOnDragEndCard(sourceListId: string, destinationListId: string, cardId: string, cardTitle: string, updatedBy: string, oldSeqNo: number, newSeqNo: number, fkboardid: string) {
+  const data = await http(`/cards/move`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      card_id: cardId,
+      source_list_id: sourceListId,
+      dest_list_id: destinationListId,
+      source_index: oldSeqNo,
+      dest_index: newSeqNo
+    }),
+  });
+  return { status: 200, data };
 }
 
-export async function useOnDragEndCard(
-  sourceListId: string,
-  destinationListId: string,
-  cardId: string,
-  cardTitle: string,
-  updatedBy: string,
-  oldSeqNo: number,
-  newSeqNo: number,
-  fkboardid: string
-) {
-  const lists = loadKanban(fkboardid);
-  const si = lists.findIndex((l) => l.list_id === sourceListId);
-  const di = lists.findIndex((l) => l.list_id === destinationListId);
-  if (si === -1 || di === -1) return { status: 404, data: null as any };
-
-  const source = { ...lists[si] };
-  const dest = { ...lists[di] };
-  const srcCards = Array.from(source.cards);
-  const [moved] = srcCards.splice(oldSeqNo, 1);
-  const dstCards = Array.from(dest.cards);
-  dstCards.splice(newSeqNo, 0, { ...moved, list_id: destinationListId });
-
-  srcCards.forEach((c, i) => (c.position = i));
-  dstCards.forEach((c, i) => (c.position = i));
-
-  lists[si] = { ...source, cards: srcCards };
-  lists[di] = { ...dest, cards: dstCards };
-  saveKanban(fkboardid, lists);
-  updateBoardProgress(fkboardid);
-  return { status: 200, data: lists };
-}
 
 /** ======= EditCard (title/desc/completed/image ≤ 5MB + dates) ======= */
-export async function EditCard(
-  editVM: FormData
-): Promise<Resp<Card> | { status: 413; data: null }> {
-  const fkboardid = String(editVM.get("fkboardid") ?? "");
-  const listId = String(editVM.get("listid") ?? "");
-  const cardId = String(editVM.get("kanbanCardId") ?? "");
-
-  const title = editVM.get("title");
-  const desc = editVM.get("desc");
-  const completed = editVM.get("completed"); // "true"/"false"
-  const startDate = editVM.get("startDate");
-  const endDate = editVM.get("endDate");
-  const file = editVM.get("uploadImage") as File | null;
-
-  const lists = loadKanban(fkboardid);
-  const li = lists.findIndex((l) => l.list_id === listId);
-  if (li === -1) return { status: 404, data: null as any };
-  const ci = lists[li].cards.findIndex((c) => c.card_id === cardId);
-  if (ci === -1) return { status: 404, data: null as any };
-
-  const card = { ...lists[li].cards[ci] };
-
-  // 5MB validation
-  if (file && file.size > 5 * 1024 * 1024) {
-    return { status: 413, data: null };
-  }
-  if (file) {
-    const dataUrl = await readFileAsDataURL(file);
-    card.imageUrl = dataUrl;
-  }
-  if (typeof title === "string") card.title = title;
-  if (typeof desc === "string") card.description = desc;
-
-  // dates
-  if (typeof startDate === "string") card.startDate = startDate || null;
-  if (typeof endDate === "string") card.endDate = endDate || null;
-
-  // completed flag: if provided and true & card has tasks, mark all done
-  if (typeof completed === "string") {
-    const isDone = completed === "true";
-    if (card.tasks && card.tasks.length) {
-      card.tasks = card.tasks.map((t) => ({
-        ...t,
-        status: isDone ? "done" : t.status,
-      }));
-    }
-  }
-
-  lists[li].cards[ci] = card;
-  saveKanban(fkboardid, lists);
-  updateBoardProgress(fkboardid);
-  return { status: 200, data: card };
+// Edit card (with file)
+export async function EditCard(fd: FormData) {
+  const cardId = String(fd.get("kanbanCardId") || "");
+  const res = await fetch(`${API_BASE}/cards/${cardId}`, {
+    method: "PUT",
+    body: fd,          // NOTE: don't set Content-Type; browser sets multipart boundary
+    credentials: "include",
+  });
+  if (res.status === 413) return { status: 413, data: null as any };
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return { status: 200, data };
 }
 
 /** ======= Subtasks ======= */
