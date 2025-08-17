@@ -39,7 +39,9 @@ type Props = {
     tasks?: { task_name: string; assigneeId?: number }[];
   }) => Promise<void>;
 
+  // UPDATED: accepts updated card payload from backend
   onSaved?: (updated?: any) => void;
+
   onDelete: (cardId: string, listId: string) => Promise<void>;
 
   members: Member[];
@@ -74,7 +76,7 @@ type Props = {
   addedbyName?: string;
   addedbyId?: number | null;
 
-  // NEW: lets the board update the card cover immediately
+  // lets the board update the card cover immediately (data URL preview)
   onLocalCoverPreview?: (p: { cardId?: string; listId?: string; dataUrl: string }) => void;
 };
 
@@ -102,7 +104,7 @@ export default function CardDrawer(props: Props) {
     fkpoid = 1001,
     addedbyName = "User",
     addedbyId = currentUserId,
-    onLocalCoverPreview, // NEW
+    onLocalCoverPreview,
   } = props;
 
   // ----- form fields -----
@@ -200,7 +202,7 @@ export default function CardDrawer(props: Props) {
     setImageFile(file);
     const r = new FileReader();
     r.onload = () => {
-      const dataUrl = String(r.result);
+      const dataUrl = String(r.result || "");
       setImagePreview(dataUrl);
       // notify parent so the card on the board updates immediately
       onLocalCoverPreview?.({
@@ -245,22 +247,25 @@ export default function CardDrawer(props: Props) {
       if (startDate) fd.append("startDate", startDate);
       if (endDate) fd.append("endDate", endDate);
       if (imageFile) fd.append("uploadImage", imageFile);
+
       const res = await EditCard(fd);
+
       if (res?.status === 413) {
         toast.error("Image too large (max 5MB)");
-        return;
+        return; // keep drawer open so user can re-pick
       }
-     
-toast.success("Saved");
 
-// IMPORTANT: pass the updated card up so parent can merge it into state (no full reload)
-onSaved?.(res.data);
+      toast.success("Saved");
 
-// optional: clear file state / close drawer
-setImageFile(undefined);
-// onClose?.(); // only if you want to close after save
-    } catch {
-      toast.error("Save failed");
+      // IMPORTANT: pass the updated card up so parent can merge into state (no full reload)
+      onSaved?.(res.data);
+
+      // clean up (fix TS: use null, not undefined)
+      setImageFile(null);
+      // optional: close drawer after save
+      // onClose();
+    } catch (err: any) {
+      toast.error(err?.message || "Save failed");
     }
   }
 
@@ -286,11 +291,12 @@ setImageFile(undefined);
       setNewTaskName("");
       setNewTaskAssignee("");
       toast.success("Task added");
-      await onSaved();
+      await onSaved?.(); // parent can reload or re-fetch card tasks
     } catch {
       toast.error("Add task failed");
     }
   }
+
   async function toggleTask(t: Task) {
     if (!card) return;
     const canToggle = isAdmin || t.assigneeId === currentUserId;
@@ -302,17 +308,18 @@ setImageFile(undefined);
       fd.append("taskId", t.task_id);
       fd.append("completed", String(t.status !== "done"));
       await SubmitTask(fd);
-      await onSaved();
+      await onSaved?.();
     } catch {
       toast.error("Update task failed");
     }
   }
+
   async function deleteTask(t: Task) {
     const canDel = isAdmin || t.assigneeId === currentUserId;
     if (!canDel) return;
     try {
       await DeleteTask(t.task_id);
-      await onSaved();
+      await onSaved?.();
     } catch {
       toast.error("Delete task failed");
     }
@@ -365,7 +372,7 @@ setImageFile(undefined);
       );
       setNewTagTitle("");
       toast.success("Tag added");
-      await onSaved();
+      await onSaved?.();
     } catch {
       toast.error("Add tag failed");
     }
@@ -375,7 +382,7 @@ setImageFile(undefined);
     try {
       await DeleteTag(tagId);
       toast.success("Tag removed");
-      await onSaved();
+      await onSaved?.();
     } catch {
       toast.error("Remove tag failed");
     }
@@ -396,12 +403,11 @@ setImageFile(undefined);
     setNewComment("");
   }
 
-
   return (
     <div
       className={`fixed top-0 right-0 h-full w-[400px] transform border-l bg-white shadow-xl transition-transform ${
         open ? "translate-x-0" : "translate-x-full"
-      } flex flex-col`}   // <-- make drawer a column so middle can scroll
+      } flex flex-col`}
       style={{ zIndex: 60 }}
       aria-hidden={!open}
     >
