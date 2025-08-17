@@ -407,7 +407,7 @@ export async function DeleteTag(
 
 // ---------- Comments ----------
 export async function AddComment(
-  fkboardid: string,              // unused in backend
+  fkboardid: string,              // unused by backend
   cardId: string,
   author: string,
   message: string
@@ -419,22 +419,21 @@ export async function AddComment(
   return { status: 200, data };
 }
 
-
-/** ======= Share & Close ======= */
+// ---------- Share ----------
 export async function getShareLink(
   fkboardid: string
 ): Promise<Resp<string>> {
-  return { status: 200, data: `/kanbanList/${fkboardid}?view=public` };
+  const data = await http<{ link: string }>(`/boards/${fkboardid}/share`);
+  return { status: 200, data: data.link };
 }
 
+// ---------- Close ----------
 export async function closeBoard(
   fkboardid: string
-): Promise<Resp<{ status: "closed" }>> {
-  const boards = loadBoards();
-  const idx = boards.findIndex((b) => b.fkboardid === fkboardid);
-  if (idx === -1) return { status: 404, data: null as any };
-  boards[idx].status = "closed";
-  boards[idx].progress = 100;
-  saveBoards(boards);
-  return { status: 200, data: { status: "closed" } };
+): Promise<Resp<{ status: "closed"; progress: number }>> {
+  const data = await http<{ status: "closed"; progress: number }>(
+    `/boards/${fkboardid}/close`,
+    { method: "PATCH" }
+  );
+  return { status: 200, data };
 }
