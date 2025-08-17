@@ -321,169 +321,104 @@ export async function EditCard(fd: FormData) {
   const cardId = String(fd.get("kanbanCardId") || "");
   const res = await fetch(`${API_BASE}/cards/${cardId}`, {
     method: "PUT",
-    body: fd,          // NOTE: don't set Content-Type; browser sets multipart boundary
+    body: fd,                 // don't set Content-Type! browser will set multipart boundary
     credentials: "include",
   });
-  if (res.status === 413) return { status: 413, data: null as any };
-  if (!res.ok) throw new Error(await res.text());
+
+  if (res.status === 413) {
+    return { status: 413, data: null as any };
+  }
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "Upload failed");
+    throw new Error(msg);
+  }
   const data = await res.json();
-  return { status: 200, data };
+  return { status: 200, data };   // data has absolute imageUrl now
 }
 
+
 /** ======= Subtasks ======= */
+// ---------- Subtasks ----------
 export async function AddTask(
   title: string,
   fkKanbanCardId: number | string,
-  addedby: string,
-  addedbyid: number | null,
-  selectedOptions: string, // assigneeId as string
-  fkboardid: number | string,
-  fkpoid?: number | string
+  addedby: string,                // not used by backend; keep signature for compatibility
+  addedbyid: number | null,       // not used by backend
+  selectedOptions: string,        // assigneeId as string
+  fkboardid: number | string,     // not used by backend
+  fkpoid?: number | string        // not used by backend
 ): Promise<Resp<Task>> {
-  const boardId = String(fkboardid);
-  const lists = loadKanban(boardId);
-  const cardId = String(fkKanbanCardId);
-
-  const loc = findCard(lists, cardId);
-  if (!loc) return { status: 404, data: null as any };
-
   const assigneeId = Number(selectedOptions);
-  const task: Task = {
-    task_id: uuid(),
-    task_name: title,
-    status: "todo",
-    assigneeId: Number.isFinite(assigneeId) ? assigneeId : undefined,
-  };
-
-  const target = lists[loc.listIndex].cards[loc.cardIndex];
-  target.tasks = [...(target.tasks || []), task];
-
-  saveKanban(boardId, lists);
-  updateBoardProgress(boardId);
-  return { status: 200, data: task };
+  const data = await http<Task>(`/cards/${fkKanbanCardId}/tasks`, {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      assigneeId: Number.isFinite(assigneeId) ? assigneeId : undefined,
+    }),
+  });
+  return { status: 200, data };
 }
 
 export async function SubmitTask(submitVM: FormData): Promise<Resp<Task>> {
-  const fkboardid = String(submitVM.get("fkboardid") ?? "");
-  const cardId = String(submitVM.get("cardId") ?? "");
+  const fkboardid = String(submitVM.get("fkboardid") ?? ""); // unused by backend
+  const cardId = String(submitVM.get("cardId") ?? "");       // unused by backend for submit
   const taskId = String(submitVM.get("taskId") ?? "");
   const completed = String(submitVM.get("completed") ?? "false") === "true";
 
-  const lists = loadKanban(fkboardid);
-  const loc = findCard(lists, cardId);
-  if (!loc) return { status: 404, data: null as any };
-
-  const card = lists[loc.listIndex].cards[loc.cardIndex];
-  const ti = (card.tasks || []).findIndex((t) => t.task_id === taskId);
-  if (ti === -1) return { status: 404, data: null as any };
-
-  const updated = { ...(card.tasks as Task[])[ti] };
-  updated.status = completed ? "done" : "todo";
-  (card.tasks as Task[])[ti] = updated;
-
-  saveKanban(fkboardid, lists);
-  updateBoardProgress(fkboardid);
-  return { status: 200, data: updated };
+  const data = await http<Task>(`/tasks/${taskId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ completed }),
+  });
+  return { status: 200, data };
 }
 
 export async function DeleteTask(
   taskid: number | string
 ): Promise<Resp<{ deleted: string }>> {
-  const tid = String(taskid);
-  const boards = loadBoards();
-  for (const b of boards) {
-    const lists = loadKanban(b.fkboardid);
-    let changed = false;
-    for (let li = 0; li < lists.length; li++) {
-      const l = lists[li];
-      const newCards = l.cards.map((c) => {
-        const before = (c.tasks || []).length;
-        const afterTasks = (c.tasks || []).filter((t) => t.task_id !== tid);
-        if (before !== afterTasks.length) changed = true;
-        return { ...c, tasks: afterTasks };
-      });
-      lists[li] = { ...l, cards: newCards };
-    }
-    if (changed) {
-      saveKanban(b.fkboardid, lists);
-      updateBoardProgress(b.fkboardid);
-      return { status: 200, data: { deleted: tid } };
-    }
-  }
-  return { status: 404, data: { deleted: tid } };
+  const data = await http<{ deleted: string }>(`/tasks/${taskid}`, {
+    method: "DELETE",
+  });
+  return { status: 200, data };
 }
 
-/** ======= Tags ======= */
+// ---------- Tags ----------
 export async function AddTag(
   title: string,
   color: string,
   fkKanbanCardId: number | string,
-  addedby: string,
-  addedbyid: number | null
+  addedby: string,               // unused in backend
+  addedbyid: number | null       // unused in backend
 ): Promise<Resp<Tag>> {
-  const boards = loadBoards();
-  for (const b of boards) {
-    const lists = loadKanban(b.fkboardid);
-    const loc = findCard(lists, String(fkKanbanCardId));
-    if (!loc) continue;
-
-    const tag: Tag = { id: uuid(), title, color };
-    const target = lists[loc.listIndex].cards[loc.cardIndex];
-    target.tags = [...(target.tags || []), tag];
-
-    saveKanban(b.fkboardid, lists);
-    return { status: 200, data: tag };
-  }
-  return { status: 404, data: null as any };
+  const data = await http<Tag>(`/cards/${fkKanbanCardId}/tags`, {
+    method: "POST",
+    body: JSON.stringify({ title, color }),
+  });
+  return { status: 200, data };
 }
 
 export async function DeleteTag(
   tagid: number | string
 ): Promise<Resp<{ deleted: string }>> {
-  const tid = String(tagid);
-  const boards = loadBoards();
-  for (const b of boards) {
-    const lists = loadKanban(b.fkboardid);
-    let changed = false;
-    for (let li = 0; li < lists.length; li++) {
-      const l = lists[li];
-      const newCards = l.cards.map((c) => {
-        const before = (c.tags || []).length;
-        const afterTags = (c.tags || []).filter((t) => String(t.id) !== tid);
-        if (before !== afterTags.length) changed = true;
-        return { ...c, tags: afterTags };
-      });
-      lists[li] = { ...l, cards: newCards };
-    }
-    if (changed) {
-      saveKanban(b.fkboardid, lists);
-      return { status: 200, data: { deleted: tid } };
-    }
-  }
-  return { status: 404, data: { deleted: tid } };
+  const data = await http<{ deleted: string }>(`/tags/${tagid}`, {
+    method: "DELETE",
+  });
+  return { status: 200, data };
 }
 
-/** ======= Comments ======= */
+// ---------- Comments ----------
 export async function AddComment(
-  fkboardid: string,
+  fkboardid: string,              // unused in backend
   cardId: string,
   author: string,
   message: string
 ): Promise<Resp<Comment>> {
-  const lists = loadKanban(fkboardid);
-  const loc = findCard(lists, cardId);
-  if (!loc) return { status: 404, data: null as any };
-  const c: Comment = {
-    id: uuid(),
-    author: author?.trim() || "Anonymous",
-    message,
-    createdAt: new Date().toISOString(),
-  };
-  const target = lists[loc.listIndex].cards[loc.cardIndex];
-  target.comments = [...(target.comments || []), c];
-  saveKanban(fkboardid, lists);
-  return { status: 200, data: c };
+  const data = await http<Comment>(`/cards/${cardId}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ author, message }),
+  });
+  return { status: 200, data };
 }
+
 
 /** ======= Share & Close ======= */
 export async function getShareLink(

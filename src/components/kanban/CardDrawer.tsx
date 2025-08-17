@@ -39,7 +39,7 @@ type Props = {
     tasks?: { task_name: string; assigneeId?: number }[];
   }) => Promise<void>;
 
-  onSaved: () => Promise<void>;
+  onSaved?: (updated?: any) => void;
   onDelete: (cardId: string, listId: string) => Promise<void>;
 
   members: Member[];
@@ -250,8 +250,15 @@ export default function CardDrawer(props: Props) {
         toast.error("Image too large (max 5MB)");
         return;
       }
-      toast.success("Saved");
-      await onSaved();
+     
+toast.success("Saved");
+
+// IMPORTANT: pass the updated card up so parent can merge it into state (no full reload)
+onSaved?.(res.data);
+
+// optional: clear file state / close drawer
+setImageFile(undefined);
+// onClose?.(); // only if you want to close after save
     } catch {
       toast.error("Save failed");
     }

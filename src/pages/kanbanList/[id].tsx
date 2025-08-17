@@ -338,9 +338,36 @@ export default function KanbanPage() {
   }
 
   // === Save edits from drawer ===
-  async function afterEditSaved() {
-    await load();
+  async function afterEditSaved(updated?: any) {
+    if (updated?.card_id) {
+      setLists(prev =>
+        prev.map(l =>
+          l.list_id === updated.list_id
+            ? {
+                ...l,
+                cards: l.cards.map(c =>
+                  c.card_id === updated.card_id
+                    ? {
+                        ...c,
+                        title: updated.title,
+                        description: updated.description ?? c.description,
+                        startDate: updated.startDate ?? c.startDate,
+                        endDate: updated.endDate ?? c.endDate,
+                        imageUrl: updated.imageUrl ?? c.imageUrl, // <- new cover from backend
+                        position: typeof updated.position === "number" ? updated.position : c.position,
+                      }
+                    : c
+                ),
+              }
+            : l
+        )
+      );
+    } else {
+      // fallback if nothing passed
+      await load();
+    }
   }
+  
 
   // === Delete card ===
   async function deleteCard(cardId: string, list_id: string) {
