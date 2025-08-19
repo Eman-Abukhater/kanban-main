@@ -20,6 +20,7 @@ export type DrawerCard = {
   startDate?: string | null;
   endDate?: string | null;
   tags?: Tag[];
+  comments?: { id: string; author: string; message: string; createdAt: string }[];
 };
 
 type Props = {
@@ -78,6 +79,13 @@ type Props = {
 
   // lets the board update the card cover immediately (data URL preview)
   onLocalCoverPreview?: (p: { cardId?: string; listId?: string; dataUrl: string }) => void;
+  AddComment?: (
+    fkboardid: string,
+    cardId: string,
+    author: string,
+    message: string
+  ) => Promise<any>;
+  
 };
 
 export default function CardDrawer(props: Props) {
@@ -114,6 +122,9 @@ export default function CardDrawer(props: Props) {
   const [endDate, setEndDate] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [liveComments, setLiveComments] = useState<
+  { id: string; author: string; message: string; createdAt: string }[]
+>([]);
 
   // tags
   const [localTags, setLocalTags] = useState<{ title: string; color?: string }[]>([]);
@@ -153,6 +164,7 @@ export default function CardDrawer(props: Props) {
       setLocalTags([]);
       setLocalCreateTasks([]);
       loadComments(card.card_id);
+      setLiveComments(card.comments ?? []);
     } else {
       // create
       setTitle("");
@@ -167,6 +179,7 @@ export default function CardDrawer(props: Props) {
       setLocalCreateTasks([]);
       setComments([]);
       setNewComment("");
+      setLiveComments([]);        
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, card, open]);
@@ -231,6 +244,7 @@ export default function CardDrawer(props: Props) {
         tags: localTags,
         tasks: localCreateTasks,
       });
+      onClose();
     } catch {}
   }
 
@@ -244,30 +258,35 @@ export default function CardDrawer(props: Props) {
       fd.append("kanbanCardId", card.card_id);
       fd.append("title", title);
       fd.append("desc", desc);
-      if (startDate) fd.append("startDate", startDate);
-      if (endDate) fd.append("endDate", endDate);
+      fd.append("startDate", startDate ?? ""); // "" = clear on server
+      fd.append("endDate",   endDate   ?? "");
       if (imageFile) fd.append("uploadImage", imageFile);
-
+  
       const res = await EditCard(fd);
-
-      if (res?.status === 413) {
-        toast.error("Image too large (max 5MB)");
-        return; // keep drawer open so user can re-pick
+      if (res?.status === 413) { toast.error("Image too large (max 5MB)"); return; }
+  
+      const updated = res?.data;
+      if (updated) {
+        // add cache-buster here too so the drawer preview refreshes instantly
+        let fresh = updated.imageUrl as string | null | undefined;
+        if (fresh) {
+          const v = Date.now();
+          fresh = fresh.includes("?") ? `${fresh}&v=${v}` : `${fresh}?v=${v}`;
+        }
+        onSaved?.({ ...updated, imageUrl: fresh });
+        if (fresh) setImagePreview(fresh);
+      } else {
+        onSaved?.();
       }
-
-      toast.success("Saved");
-
-      // IMPORTANT: pass the updated card up so parent can merge into state (no full reload)
-      onSaved?.(res.data);
-
-      // clean up (fix TS: use null, not undefined)
-      setImageFile(null);
-      // optional: close drawer after save
-      // onClose();
-    } catch (err: any) {
-      toast.error(err?.message || "Save failed");
+      
+      onClose();
+  }
+    catch (error) {
+      console.error("Edit card failed:", error);
+      toast.error("Edit card failed");
     }
   }
+  
 
   // Tasks — EDIT
   async function addSubtask() {
@@ -387,21 +406,35 @@ export default function CardDrawer(props: Props) {
       toast.error("Remove tag failed");
     }
   }
-
-  // Comments (local)
   function addComment() {
+    if (!card) return;
     const author =
       (typeof window !== "undefined" &&
         (sessionStorage.getItem("userName") || "Anonymous")) ||
       "Anonymous";
     const text = newComment.trim();
-    if (!card || !text) return;
-    const c = { id: crypto.randomUUID(), author, text, ts: Date.now() };
-    const next = [c, ...comments];
-    setComments(next);
-    saveComments(card.card_id, next);
-    setNewComment("");
+    if (!text) return;
+  
+    if (!props.AddComment) {
+      toast.error("Comment API not available");
+      return;
+    }
+  
+    props.AddComment(props.fkboardid, card.card_id, author, text)
+      .then((resp) => {
+        setNewComment("");
+        // append instantly
+        if (resp?.data) {
+          setLiveComments((prev) => [...prev, resp.data]);
+        }
+        toast.success("Comment posted");
+        // let the parent reload in background so other clients see it
+        props.onSaved?.();
+      })
+      .catch(() => toast.error("Failed to post comment"));
   }
+  
+  
 
   return (
     <div
@@ -468,6 +501,7 @@ export default function CardDrawer(props: Props) {
           <div className="mb-1 text-xs font-medium text-gray-600">Image</div>
           {imagePreview ? (
             <img
+              key={imagePreview}
               src={imagePreview}
               className="mb-2 w-full rounded object-cover"
               style={{ maxHeight: 180 }}
@@ -723,44 +757,42 @@ export default function CardDrawer(props: Props) {
         )}
 
         {/* Comments (anonymous, local) */}
-        {mode === "edit" && card && (
-          <div>
-            <div className="mb-2 text-xs font-medium text-gray-600">Comments</div>
+ {mode === "edit" && card && (
+  <div>
+    <div className="mb-2 text-xs font-medium text-gray-600">Comments</div>
 
-            <div className="space-y-2">
-              {comments.length === 0 ? (
-                <div className="text-xs text-gray-500">No comments yet</div>
-              ) : (
-                comments.map((c) => (
-                  <div key={c.id} className="rounded border p-2">
-                    <div className="mb-1 text-[11px] text-gray-500">
-                      {c.author} • {new Date(c.ts).toLocaleString()}
-                    </div>
-                    <div className="text-sm">{c.text}</div>
-                  </div>
-                ))
-              )}
+    <div className="space-y-2">
+      {liveComments.length === 0 ? (
+        <div className="text-xs text-gray-500">No comments yet</div>
+      ) : (
+        liveComments.map((c) => (
+          <div key={c.id} className="rounded border p-2">
+            <div className="mb-1 text-[11px] text-gray-500">
+              {c.author} • {new Date(c.createdAt).toLocaleString()}
             </div>
-
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Write a comment…"
-                className="w-full rounded border px-2 py-1 text-sm"
-              />
-              <button
-                onClick={addComment}
-                className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
-              >
-                Post
-              </button>
-            </div>
-            <div className="mt-1 text-[11px] text-gray-500">
-              Posts are stored locally and allow anonymous users.
-            </div>
+            <div className="text-sm">{c.message}</div>
           </div>
-        )}
+        ))
+      )}
+    </div>
+
+    <div className="mt-2 flex items-center gap-2">
+      <input
+        value={newComment}
+        onChange={(e) => setNewComment(e.target.value)}
+        placeholder="Write a comment…"
+        className="w-full rounded border px-2 py-1 text-sm"
+      />
+      <button
+        onClick={addComment}
+        className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+      >
+        Post
+      </button>
+    </div>
+  </div>
+)}
+
       </div>
 
       {/* Footer (fixed) */}
@@ -783,12 +815,18 @@ export default function CardDrawer(props: Props) {
         ) : (
           <div className="flex items-center justify-between gap-2">
             {card ? (
-              <button
-                onClick={() => onDelete(card.card_id, card.list_id)}
-                className="rounded border px-3 py-1 text-sm text-red-600 hover:bg-red-50"
-              >
-                Delete
-              </button>
+             <button
+             onClick={async () => {
+               try {
+                 await onDelete(card.card_id, card.list_id);
+                 onClose(); // <--- close drawer after successful delete
+               } catch {
+               }
+             }}
+             className="rounded border px-3 py-1 text-sm text-red-600 hover:bg-red-50"
+           >
+             Delete
+           </button>
             ) : (
               <div />
             )}

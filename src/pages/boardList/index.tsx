@@ -305,7 +305,7 @@ export default function BoardList() {
         />
 
         {/* Table */}
-        <div className="overflow-x-auto rounded-lg border">
+        <div className="overflow-x-auto  overflow-y-visible rounded-lg border">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50">
               <tr className="[&>th]:px-3 [&>th]:py-2 [&>th]:text-left">
@@ -427,27 +427,24 @@ export default function BoardList() {
                       >
                         {editing("members") ? (
                           <Select
-                            autoFocus
-                            isMulti
-                            className="text-sm"
-                            options={membersOptions.map((m) => ({
-                              value: m.id,
-                              label: m.name,
-                            }))}
-                            defaultValue={(r.members || []).map(
-                              (m: Member) => ({
-                                value: m.id,
-                                label: m.name,
-                              })
-                            )}
-                            onChange={(opts) =>
-                              saveMembers(
-                                r.boardid,
-                                (opts || []).map((o: any) => Number(o.value))
-                              )
-                            }
-                            onBlur={() => setEditCell(null)}
-                          />
+                          autoFocus
+                          isMulti
+                          className="text-sm"
+                          options={membersOptions.map(m => ({ value: m.id, label: m.name }))}
+                          defaultValue={(r.members || []).map((m: Member) => ({ value: m.id, label: m.name }))}
+                          onChange={(opts) =>
+                            saveMembers(r.boardid, (opts || []).map((o: any) => Number(o.value)))
+                          }
+                          onBlur={() => setEditCell(null)}
+                          /** --- important: render menu in a portal --- */
+                          menuPortalTarget={typeof window !== "undefined" ? document.body : null}
+                          menuPosition="fixed"
+                          menuShouldScrollIntoView={false}
+                          styles={{
+                            menuPortal: (base) => ({ ...base, zIndex: 9999 }),  // on top of table
+                            menu: (base) => ({ ...base, zIndex: 9999 }),
+                          }}
+                        />
                         ) : (
                           <div className="flex -space-x-2">
                             {(r.members || [])

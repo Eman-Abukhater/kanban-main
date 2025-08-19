@@ -9,7 +9,16 @@ import {
   DropResult,
 } from "react-beautiful-dnd";
 import { toast } from "react-toastify";
+import { setToken, getToken, readTokenPayload, clearToken } from "@/lib/authToken";
 import CardDrawer from "@/components/kanban/CardDrawer";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
+
+function toAbsoluteUrl(u?: string | null) {
+  if (!u) return null;
+  if (u.startsWith("http://") || u.startsWith("https://")) return u;
+  if (u.startsWith("/")) return API_BASE + u;
+  return u;
+}
 
 // ==== Types (page-local, normalized) ====
 type Role = "admin" | "employee";
@@ -48,14 +57,17 @@ export default function KanbanPage() {
     userGuid?: string;
     view?: string;
   };
-
   const fkboardid = id; // GUID in URL
-  const role: Role = userGuid === "ADMIN-GUID" ? "admin" : "employee";
-  const readOnly = view === "public";
-  const isAdmin = role === "admin" && !readOnly;
 
-  // Replace this with your real auth later
-  const currentUserId = isAdmin ? 205 : 301;
+  const payload = readTokenPayload();
+  const readOnly = (router.query.view === "public") || payload?.typ === "viewer";
+  const isAdmin = payload?.role === "admin" && !readOnly;
+  // prefer user id from token; fall back to your old defaults
+  const currentUserId =
+    typeof payload?.sub === "number"
+      ? payload.sub
+      : (isAdmin ? 205 : 301);
+  ;
 
   const [loading, setLoading] = useState(true);
   const [lists, setLists] = useState<List[]>([]);
@@ -129,7 +141,7 @@ export default function KanbanPage() {
           title: String(c.title ?? ""),
           description: c.description ?? c.desc ?? "",
           position: Number(c.position ?? c.seq ?? 0),
-          imageUrl: c.imageUrl ?? c.image ?? c.imageDataUrl ?? null,
+          imageUrl: toAbsoluteUrl(c.imageUrl ?? c.image ?? c.imageDataUrl ?? null),
           tasks: Array.isArray(c.tasks)
             ? c.tasks
             : Array.isArray(c.subtasks)
@@ -149,6 +161,7 @@ export default function KanbanPage() {
                 title: String(t.title ?? t.name ?? ""),
                 color: t.color,
               }))
+            
             : [],
         }));
         return { list_id, list_name, position, cards };
@@ -167,6 +180,7 @@ export default function KanbanPage() {
 
     return { lists, title, progress: prog };
   }
+
 
   async function load() {
     if (!fkboardid) return;
@@ -189,10 +203,58 @@ export default function KanbanPage() {
   }
 
   useEffect(() => {
-    load();
+    if (!router.isReady) return;
+    (async () => {
+      await ensureJwtFromUrl();
+      await load();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fkboardid]);
-
+  }, [router.isReady, id, view, userGuid]);
+  
+  async function ensureJwtFromUrl() {
+    const { id: fkboardid, userGuid, view } = router.query as any;
+  
+    // viewer
+    if (view === "public" && fkboardid) {
+      const payload = readTokenPayload();
+      if (payload?.typ === "viewer" && payload?.fkboardid === fkboardid) return;
+      try {
+        const res = await fetch(`${API_BASE}/auth/public-token/${fkboardid}`);
+        const json = await res.json();
+        if (json?.token) setToken(json.token);
+      } catch {}
+      return;
+    }
+  
+    // admin
+    if (userGuid === "ADMIN-GUID") {
+      try {
+        const res = await fetch(`${API_BASE}/auth/dev-login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "admin", user_id: 205 }),
+        });
+        const json = await res.json();
+        if (json?.token) setToken(json.token);
+      } catch {}
+      return;
+    }
+  
+    // default employee
+    const payload = readTokenPayload();
+    if (!payload || payload?.typ === "viewer") {
+      try {
+        const res = await fetch(`${API_BASE}/auth/dev-login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "employee", user_id: 301 }),
+        });
+        const json = await res.json();
+        if (json?.token) setToken(json.token);
+      } catch {}
+    }
+  }
+  
   // === Add list (admin only, max 6) ===
   async function submitNewList() {
     if (!isAdmin || !newListName.trim()) return;
@@ -338,36 +400,67 @@ export default function KanbanPage() {
   }
 
   // === Save edits from drawer ===
-  async function afterEditSaved(updated?: any) {
-    if (updated?.card_id) {
-      setLists(prev =>
-        prev.map(l =>
-          l.list_id === updated.list_id
-            ? {
-                ...l,
-                cards: l.cards.map(c =>
-                  c.card_id === updated.card_id
-                    ? {
-                        ...c,
-                        title: updated.title,
-                        description: updated.description ?? c.description,
-                        startDate: updated.startDate ?? c.startDate,
-                        endDate: updated.endDate ?? c.endDate,
-                        imageUrl: updated.imageUrl ?? c.imageUrl, // <- new cover from backend
-                        position: typeof updated.position === "number" ? updated.position : c.position,
-                      }
-                    : c
-                ),
-              }
-            : l
-        )
-      );
-    } else {
-      // fallback if nothing passed
-      await load();
-    }
+// === Save edits from drawer ===
+// accepts optional "updated" payload from CardDrawer, merges into local state.
+// falls back to a full reload if nothing passed.
+// === Save edits from drawer ===
+// === Save edits from drawer ===
+async function afterEditSaved(updated?: {
+  card_id: string;
+  list_id: string;
+  title?: string;
+  description?: string;
+  position?: number;
+  imageUrl?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}) {
+  if (!updated) {
+    await load(); // fallback – full refresh from backend
+    return;
   }
-  
+
+  // normalize absolute vs relative
+  let nextImageUrl = updated.imageUrl ?? null;
+
+  // convert to absolute if it isn't already
+  if (nextImageUrl) {
+    if (nextImageUrl.startsWith("/")) {
+      nextImageUrl = (process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000") + nextImageUrl;
+    }
+    // 🔥 cache-bust so the browser *must* fetch the new file
+    const v = Date.now();
+    nextImageUrl = nextImageUrl.includes("?") ? `${nextImageUrl}&v=${v}` : `${nextImageUrl}?v=${v}`;
+  }
+
+  const merged = {
+    ...updated,
+    imageUrl: nextImageUrl,
+  };
+
+  setLists(prev =>
+    prev.map(l => {
+      if (l.list_id !== merged.list_id) return l;
+      return {
+        ...l,
+        cards: l.cards.map(c =>
+          c.card_id === merged.card_id
+            ? {
+                ...c,
+                title: merged.title ?? c.title,
+                description: merged.description ?? c.description,
+                position: typeof merged.position === "number" ? merged.position : c.position,
+                imageUrl: merged.imageUrl !== undefined ? merged.imageUrl : c.imageUrl,
+                startDate: merged.startDate ?? c.startDate,
+                endDate: merged.endDate ?? c.endDate,
+              }
+            : c
+        ),
+      };
+    })
+  );
+}
+
 
   // === Delete card ===
   async function deleteCard(cardId: string, list_id: string) {
@@ -749,8 +842,9 @@ function handleLocalCoverPreview(p: { cardId?: string; listId?: string; dataUrl:
                                         ) : null}
                                         {c.imageUrl ? (
                                           <img
-                                            src={c.imageUrl}
-                                            className="mt-2 w-full rounded object-cover"
+                                          key={c.imageUrl}               // <= forces React to remount on URL change
+                                          src={c.imageUrl}
+                                          className="mt-2 w-full rounded object-cover"
                                             style={{ height: 160 }}    // <-- clamp cover so it can't stretch other lists
                                             alt=""
                                           />
@@ -823,7 +917,7 @@ function handleLocalCoverPreview(p: { cardId?: string; listId?: string; dataUrl:
         onSaved={afterEditSaved}
         onDelete={(cid, lid) => deleteCard(cid, lid)}
         members={members}
-        readOnly={false}
+        readOnly={readOnly}   
         isAdmin={isAdmin}
         currentUserId={currentUserId}
         EditCard={kanbanApi.EditCard}
@@ -832,6 +926,7 @@ function handleLocalCoverPreview(p: { cardId?: string; listId?: string; dataUrl:
         DeleteTask={kanbanApi.DeleteTask}
         AddTag={(kanbanApi as any).AddTag}
         DeleteTag={(kanbanApi as any).DeleteTag}
+        AddComment={kanbanApi.AddComment}  
         fkboardid={fkboardid as string}
         // NEW: instant cover update on file choose
         onLocalCoverPreview={handleLocalCoverPreview}

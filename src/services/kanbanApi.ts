@@ -1,21 +1,25 @@
 import { v4 as uuid } from "uuid";
+import { getToken } from "@/lib/authToken";   
 
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://localhost:4000";
 
-async function http<T>(url: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      ...(opts?.headers || {}),
-    },
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<T>;
-}
+  async function http<T>(url: string, opts?: RequestInit): Promise<T> {
+    const token = getToken(); // <--- add
+    const isForm = opts?.body instanceof FormData;
+    const res = await fetch(`${API_BASE}${url}`, {
+      ...opts,
+      headers: {
+        ...(isForm ? {} : { "Content-Type": "application/json" }),
+        ...(opts?.headers || {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),   // <--- add
+      } as any,
+      credentials: "include",
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<T>;
+  }
 
 /** ======= Seed + Types ======= */
 const FAKE_MEMBERS = [
@@ -318,11 +322,13 @@ export async function useOnDragEndCard(sourceListId: string, destinationListId: 
 /** ======= EditCard (title/desc/completed/image ≤ 5MB + dates) ======= */
 // Edit card (with file)
 export async function EditCard(fd: FormData) {
+  const token = getToken(); // <--- add
   const cardId = String(fd.get("kanbanCardId") || "");
   const res = await fetch(`${API_BASE}/cards/${cardId}`, {
     method: "PUT",
-    body: fd,                 // don't set Content-Type! browser will set multipart boundary
+    body: fd,                 // don't set Content-Type! browser sets boundary
     credentials: "include",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,  // <--- add
   });
 
   if (res.status === 413) {
@@ -333,7 +339,7 @@ export async function EditCard(fd: FormData) {
     throw new Error(msg);
   }
   const data = await res.json();
-  return { status: 200, data };   // data has absolute imageUrl now
+  return { status: 200, data };   // has absolute imageUrl now
 }
 
 
